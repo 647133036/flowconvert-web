@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>图像生成 - FlowConvert</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+.img-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  background: var(--surface);
+  padding: 6px;
+  border-radius: var(--radius);
+}
+.img-tab {
+  flex: 1;
+  padding: 12px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text2);
+  font-size: 0.85rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-weight: 500;
+  text-align: center;
+}
+.img-tab:hover {
+  color: var(--text);
+  background: var(--surface2);
+}
+.img-tab.active {
+  background: var(--primary);
+  color: #fff;
+}
+.img-panel {
+  display: none;
+}
+.img-panel.active {
+  display: block;
+}
+.prompt-area {
+  width: 100%;
+  min-height: 100px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.95rem;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+.prompt-area:focus {
+  border-color: var(--primary);
+}
+.size-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.size-btn {
+  padding: 10px 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+.size-btn:hover {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.05);
+}
+.size-btn.active {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--primary);
+}
+.size-btn .size-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  display: block;
+}
+.size-btn .size-desc {
+  font-size: 0.75rem;
+  color: var(--text2);
+  margin-top: 2px;
+}
+.upload-area {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 32px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: var(--surface);
+  margin-bottom: 16px;
+}
+.upload-area:hover, .upload-area.drag-over {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.05);
+}
+.upload-area.has-image {
+  padding: 12px;
+}
+.upload-area img {
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: var(--radius-sm);
+}
+.upload-area .upload-icon {
+  margin-bottom: 12px;
+}
+.aspect-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.aspect-row label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  min-width: 60px;
+}
+.aspect-btns {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.aspect-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: all 0.15s;
+}
+.aspect-btn:hover {
+  border-color: var(--primary);
+}
+.aspect-btn.active {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+.ref-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.ref-card {
+  position: relative;
+  aspect-ratio: 1;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  overflow: hidden;
+  background: var(--surface2);
+}
+.ref-card:hover {
+  border-color: var(--primary);
+}
+.ref-card.has-image {
+  border-style: solid;
+  border-color: var(--primary);
+}
+.ref-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ref-card .ref-label {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  right: 4px;
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  font-size: 0.7rem;
+  padding: 2px 4px;
+  border-radius: 3px;
+  text-align: center;
+}
+.quality-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.quality-row label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  min-width: 60px;
+}
+.quality-row input[type="range"] {
+  flex: 1;
+}
+.quality-value {
+  min-width: 40px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--primary);
+}
+.format-info {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-top: 24px;
+}
+.format-info h3 {
+  font-size: 0.95rem;
+  margin-bottom: 12px;
+}
+.format-info ul {
+  list-style: none;
+  font-size: 0.85rem;
+  color: var(--text2);
+}
+.format-info li {
+  padding: 4px 0;
+  padding-left: 16px;
+  position: relative;
+}
+.format-info li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  color: var(--success);
+}
+</style>
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="/" class="nav-logo">FlowConvert</a>
+    <div class="nav-links">
+      <a href="/">格式转换</a>
+      <a href="/idphoto">证件照</a>
+      <a href="/translate">翻译</a>
+      <a href="/video">视频生成</a>
+      <a href="/image" class="active">图像生成</a>
+      <a href="/about">常见问题</a>
+      <a href="/donate">赞赏支持</a>
+    </div>
+  </div>
+</nav>
+
+<main class="container">
+  <div class="hero">
+    <h1>图像生成工具</h1>
+    <p class="subtitle">AI 驱动的高质量图像生成，支持多种创作模式</p>
+  </div>
+
+  <!-- 模式切换 -->
+  <div class="img-tabs">
+    <button class="img-tab active" data-mode="text">文生图</button>
+    <button class="img-tab" data-mode="edit">图编辑</button>
+    <button class="img-tab" data-mode="compose">多图合成</button>
+  </div>
+
+  <!-- 文生图 -->
+  <div id="text-mode" class="img-panel active">
+    <div class="param-group">
+      <label>提示词</label>
+      <textarea class="prompt-area" id="textPrompt" placeholder="描述你想要生成的图像，例如：一只穿着宇航服的猫坐在月球上，背景是地球，科幻风格，高细节..."></textarea>
+    </div>
+    
+    <div class="param-group">
+      <label>图像尺寸</label>
+      <div class="size-grid">
+        <button class="size-btn active" data-w="1024" data-h="1024">
+          <span class="size-label">1K</span>
+          <span class="size-desc">1024×1024</span>
+        </button>
+        <button class="size-btn" data-w="1792" data-h="1024">
+          <span class="size-label">2K 横版</span>
+          <span class="size-desc">1792×1024</span>
+        </button>
+        <button class="size-btn" data-w="1024" data-h="1792">
+          <span class="size-label">2K 竖版</span>
+          <span class="size-desc">1024×1792</span>
+        </button>
+        <button class="size-btn" data-w="2048" data-h="1536">
+          <span class="size-label">3K 横版</span>
+          <span class="size-desc">2048×1536</span>
+        </button>
+        <button class="size-btn" data-w="1536" data-h="2048">
+          <span class="size-label">3K 竖版</span>
+          <span class="size-desc">1536×2048</span>
+        </button>
+        <button class="size-btn" data-w="2048" data-h="2048">
+          <span class="size-label">4K</span>
+          <span class="size-desc">2048×2048</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="param-group">
+      <label>宽高比</label>
+      <div class="aspect-btns">
+        <button class="aspect-btn active" data-ratio="1:1">1:1</button>
+        <button class="aspect-btn" data-ratio="16:9">16:9</button>
+        <button class="aspect-btn" data-ratio="9:16">9:16</button>
+        <button class="aspect-btn" data-ratio="4:3">4:3</button>
+        <button class="aspect-btn" data-ratio="3:4">3:4</button>
+      </div>
+    </div>
+
+    <div class="param-group">
+      <label>质量 <span class="quality-value" id="qualityValue">1</span></label>
+      <input type="range" id="qualitySlider" min="1" max="5" value="1" step="1">
+    </div>
+
+    <button id="textGenerateBtn" class="btn btn-primary" disabled>生成图像</button>
+  </div>
+
+  <!-- 图编辑 -->
+  <div id="edit-mode" class="img-panel">
+    <div class="upload-area" id="editUpload">
+      <div class="upload-icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+      </div>
+      <p>上传原始图像</p>
+      <p class="hint">支持 JPG / PNG / WebP</p>
+      <input type="file" id="editFileInput" accept=".jpg,.jpeg,.png,.webp" hidden>
+    </div>
+
+    <div class="param-group">
+      <label>编辑指令</label>
+      <textarea class="prompt-area" id="editPrompt" placeholder="描述你想要的编辑效果，例如：替换背景为海滩、添加夕阳效果、增强色彩饱和度..."></textarea>
+    </div>
+
+    <div class="param-group">
+      <label>输出尺寸</label>
+      <select id="editSize" class="select">
+        <option value="original">保持原尺寸</option>
+        <option value="1k">1K (1024×1024)</option>
+        <option value="2k">2K (1792×1024)</option>
+        <option value="4k">4K (2048×2048)</option>
+      </select>
+    </div>
+
+    <button id="editBtn" class="btn btn-primary" disabled>执行编辑</button>
+  </div>
+
+  <!-- 多图合成 -->
+  <div id="compose-mode" class="img-panel">
+    <div class="param-group">
+      <label>参考图像（可选，最多4张）</label>
+      <div class="ref-grid">
+        <div class="ref-card" id="refCard1">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="0">
+          <span class="ref-label">参考1</span>
+        </div>
+        <div class="ref-card" id="refCard2">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="1">
+          <span class="ref-label">参考2</span>
+        </div>
+        <div class="ref-card" id="refCard3">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="2">
+          <span class="ref-label">参考3</span>
+        </div>
+        <div class="ref-card" id="refCard4">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="3">
+          <span class="ref-label">参考4</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="param-group">
+      <label>提示词</label>
+      <textarea class="prompt-area" id="composePrompt" placeholder="描述你想要合成的图像效果，例如：将多张产品图组合成精美的广告海报..."></textarea>
+    </div>
+
+    <div class="param-group">
+      <label>图像尺寸</label>
+      <div class="size-grid">
+        <button class="size-btn active" data-w="1024" data-h="1024">
+          <span class="size-label">1K</span>
+          <span class="size-desc">1024×1024</span>
+        </button>
+        <button class="size-btn" data-w="1792" data-h="1024">
+          <span class="size-label">2K 横版</span>
+          <span class="size-desc">1792×1024</span>
+        </button>
+        <button class="size-btn" data-w="1024" data-h="1792">
+          <span class="size-label">2K 竖版</span>
+          <span class="size-desc">1024×1792</span>
+        </button>
+      </div>
+    </div>
+
+    <button id="composeBtn" class="btn btn-primary" disabled>生成图像</button>
+  </div>
+
+  <!-- 状态区 -->
+  <div id="status" class="status-panel" hidden>
+    <div class="spinner"></div>
+    <p id="statusText">正在生成图像...</p>
+  </div>
+
+  <!-- 结果区 -->
+  <div id="result" class="result-panel" hidden>
+    <div class="result-icon">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2">
+        <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+        <polyline points="22 4 12 14.01 9 11.01"/>
+      </svg>
+    </div>
+    <p id="resultText">图像生成成功！</p>
+    <img id="resultImage" style="width:100%;border-radius:var(--radius);margin-bottom:16px;max-height:500px;object-fit:contain;">
+    <a id="downloadLink" class="btn btn-success" download>下载图像</a>
+    <button id="resetBtn" class="btn btn-secondary" style="margin-left:8px;">重新生成</button>
+  </div>
+
+  <!-- 适用场景 -->
+  <div class="format-info">
+    <h3>适用场景</h3>
+    <ul>
+      <li>概念艺术、视觉探索和海报草稿</li>
+      <li>活动图片、产品视觉和社交媒体创意</li>
+      <li>精细场景、复杂环境和丰富构图</li>
+      <li>风格迁移、场景重打光和背景变换</li>
+      <li>产品照片、模型图和商业视觉</li>
+      <li>封面、横幅、缩略图和帖子图片</li>
+    </ul>
+  </div>
+</main>
+
+<footer class="footer">
+  <p>FlowConvert &copy; 2026 · 基于 Go + OpenCode 构建 · 反馈：647133036@qq.com</p>
+</footer>
+
+<script>
+// ── State ──
+let currentMode = 'text';
+let isGenerating = false;
+let editFile = null;
+let refFiles = [];
+
+// ── DOM refs ──
+const els = {};
+function $(id) { return document.getElementById(id); }
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Mode tabs
+  document.querySelectorAll('.img-tab').forEach(btn => {
+    btn.addEventListener('click', () => switchMode(btn.dataset.mode));
+  });
+
+  // Size buttons
+  document.querySelectorAll('.size-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      btn.closest('.size-grid').querySelectorAll('.size-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  // Aspect buttons
+  document.querySelectorAll('.aspect-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      btn.closest('.aspect-btns').querySelectorAll('.aspect-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  // Quality slider
+  const qualitySlider = $('qualitySlider');
+  const qualityValue = $('qualityValue');
+  if (qualitySlider) {
+    qualitySlider.addEventListener('input', () => {
+      qualityValue.textContent = qualitySlider.value;
+    });
+  }
+
+  // Text mode
+  const textPrompt = $('textPrompt');
+  const textGenerateBtn = $('textGenerateBtn');
+  if (textPrompt && textGenerateBtn) {
+    textPrompt.addEventListener('input', () => {
+      textGenerateBtn.disabled = !textPrompt.value.trim();
+    });
+    textGenerateBtn.addEventListener('click', generateTextImage);
+  }
+
+  // Edit mode
+  const editUpload = $('editUpload');
+  const editFileInput = $('editFileInput');
+  const editPrompt = $('editPrompt');
+  const editBtn = $('editBtn');
+  
+  if (editUpload && editFileInput) {
+    editUpload.addEventListener('click', () => editFileInput.click());
+    editUpload.addEventListener('dragover', e => { e.preventDefault(); editUpload.classList.add('drag-over'); });
+    editUpload.addEventListener('dragleave', () => editUpload.classList.remove('drag-over'));
+    editUpload.addEventListener('drop', e => {
+      e.preventDefault();
+      editUpload.classList.remove('drag-over');
+      if (e.dataTransfer.files.length > 0) handleEditFile(e.dataTransfer.files[0]);
+    });
+    editFileInput.addEventListener('change', e => {
+      if (e.target.files.length > 0) handleEditFile(e.target.files[0]);
+    });
+  }
+  
+  if (editPrompt && editBtn) {
+    editPrompt.addEventListener('input', () => {
+      editBtn.disabled = !(editFile && editPrompt.value.trim());
+    });
+    editBtn.addEventListener('click', generateEditImage);
+  }
+
+  // Compose mode
+  document.querySelectorAll('.ref-input').forEach(input => {
+    input.addEventListener('change', e => handleRefUpload(e));
+  });
+  
+  const composePrompt = $('composePrompt');
+  const composeBtn = $('composeBtn');
+  if (composePrompt && composeBtn) {
+    composePrompt.addEventListener('input', () => {
+      composeBtn.disabled = !composePrompt.value.trim();
+    });
+    composeBtn.addEventListener('click', generateComposeImage);
+  }
+
+  // Reset
+  $('resetBtn').addEventListener('click', resetAll);
+});
+
+function switchMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.img-tab').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  document.querySelectorAll('.img-panel').forEach(p => p.classList.remove('active'));
+  $(mode + '-mode').classList.add('active');
+  hideResult();
+}
+
+function handleEditFile(file) {
+  editFile = file;
+  const reader = new FileReader();
+  reader.onload = e => {
+    $('editUpload').classList.add('has-image');
+    $('editUpload').innerHTML = `<img src="${e.target.result}"><input type="file" id="editFileInput" accept=".jpg,.jpeg,.png,.webp" hidden>`;
+    $('editFileInput').addEventListener('change', ev => {
+      if (ev.target.files.length > 0) handleEditFile(ev.target.files[0]);
+    });
+  };
+  reader.readAsDataURL(file);
+  $('editBtn').disabled = !editPrompt.value.trim();
+}
+
+function handleRefUpload(e) {
+  const idx = parseInt(e.target.dataset.index);
+  const file = e.target.files[0];
+  if (!file) return;
+  refFiles[idx] = file;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const card = document.getElementById('refCard' + (idx + 1));
+    card.classList.add('has-image');
+    card.innerHTML = `<img src="${ev.target.result}"><span class="ref-label">${idx + 1}</span>`;
+    card.querySelector('input').addEventListener('change', handleRefUpload);
+  };
+  reader.readAsDataURL(file);
+  updateComposeBtn();
+}
+
+function updateComposeBtn() {
+  $('composeBtn').disabled = !composePrompt.value.trim();
+}
+
+() {
+  if (isGenerating) return;
+  isGenerating = true;
+  showStatus('正在生成图像...');
+  try {
+    const formData = new FormData();
+    formData.append('prompt', $('textPrompt').value);
+    formData.append('width', '512');
+    formData.append('height', '512');
+    
+    const resp = await fetch('/api/convert/image/text', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await resp.json();
+    
+    if (data.success) {
+      $('resultImage').src = '/api/download/' + data.download_url.split('/').pop();
+      $('downloadLink').href = '/api/download/' + data.download_url.split('/').pop();
+      showResult('图像生成成功！');
+    } else {
+      showError(data.error || '生成失败');
+    }
+  } catch (err) {
+    showError(err.message || '生成失败，请重试');
+  } finally {
+    isGenerating = false;
+  }
+}
+  } catch (err) {
+    showError(err.message || '生成失败，请重试');
+  } finally {
+    isGenerating = false;
+  }
+}
+
+async function generateEditImage() {
+  if (isGenerating) return;
+  isGenerating = true;
+  showStatus('正在编辑图像...');
+  try {
+    const formData = new FormData();
+    formData.append('image', editFile);
+    formData.append('prompt', editPrompt.value);
+    formData.append('size', $('editSize').value);
+    
+    const resp = await fetch('/api/convert/image/edit', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await resp.json();
+    
+    if (data.success) {
+      const url = '/api/download/' + data.download_url.split('/').pop();
+      $('resultImage').src = url;
+      $('downloadLink').href = url;
+      showResult('图像编辑成功！');
+    } else {
+      showError(data.error || '编辑失败');
+    }
+  } catch (err) {
+    showError(err.message || '编辑失败，请重试');
+  } finally {
+    isGenerating = false;
+  }
+}
+
+async function generateComposeImage() {
+  if (isGenerating) return;
+  isGenerating = true;
+  showStatus('正在合成图像...');
+  try {
+    const formData = new FormData();
+    formData.append('prompt', composePrompt.value);
+    refFiles.forEach((file, idx) => {
+      if (file) formData.append('ref_' + idx, file);
+    });
+    formData.append('width', '512');
+    formData.append('height', '512');
+    
+    const resp = await fetch('/api/convert/image/compose', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await resp.json();
+    
+    if (data.success) {
+      const url = '/api/download/' + data.download_url.split('/').pop();
+      $('resultImage').src = url;
+      $('downloadLink').href = url;
+      showResult('图像合成成功！');
+    } else {
+      showError(data.error || '合成失败');
+    }
+  } catch (err) {
+    showError(err.message || '合成失败，请重试');
+  } finally {
+    isGenerating = false;
+  }
+}
+
+function showStatus(text) {
+  $('status').hidden = false;
+  $('result').hidden = true;
+  $('statusText').textContent = text;
+}
+
+function showResult(text) {
+  $('status').hidden = true;
+  $('result').hidden = false;
+  $('resultText').textContent = text;
+  $('resultImage').src = '';
+}
+
+function showError(msg) {
+  $('status').hidden = true;
+  $('result').hidden = false;
+  $('resultText').textContent = msg;
+  $('resultText').style.color = '#ef4444';
+}
+
+function hideResult() {
+  $('status').hidden = true;
+  $('result').hidden = true;
+}
+
+function resetAll() {
+  hideResult();
+  editFile = null;
+  refFiles = [];
+  $('textPrompt').value = '';
+  $('editPrompt').value = '';
+  $('composePrompt').value = '';
+  $('qualitySlider').value = 1;
+  $('qualityValue').textContent = '1';
+  
+  // Reset edit upload
+  const editUpload = $('editUpload');
+  editUpload.classList.remove('has-image');
+  editUpload.innerHTML = `
+    <div class="upload-icon">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5">
+        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+    </div>
+    <p>上传原始图像</p>
+    <p class="hint">支持 JPG / PNG / WebP</p>
+    <input type="file" id="editFileInput" accept=".jpg,.jpeg,.png,.webp" hidden>
+  `;
+  $('editFileInput').addEventListener('change', e => {
+    if (e.target.files.length > 0) handleEditFile(e.target.files[0]);
+  });
+  editUpload.addEventListener('click', () => $('editFileInput').click());
+  
+  // Reset ref cards
+  for (let i = 1; i <= 4; i++) {
+    const card = document.getElementById('refCard' + i);
+    card.classList.remove('has-image');
+    card.innerHTML = `<input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="${i-1}"><span class="ref-label">参考${i}</span>`;
+  }
+  
+  // Reset buttons
+  $('textGenerateBtn').disabled = true;
+  $('editBtn').disabled = true;
+  $('composeBtn').disabled = true;
+  
+  // Reset size buttons
+  document.querySelectorAll('.size-btn').forEach((btn, idx) => {
+    btn.classList.toggle('active', idx === 0);
+  });
+  
+  // Reset aspect buttons
+  document.querySelectorAll('.aspect-btn').forEach((btn, idx) => {
+    btn.classList.toggle('active', idx === 0);
+  });
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+</body>
+</html>

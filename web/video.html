@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频生成 - FlowConvert</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+.video-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  background: var(--surface);
+  padding: 6px;
+  border-radius: var(--radius);
+}
+.video-tab {
+  flex: 1;
+  padding: 12px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text2);
+  font-size: 0.9rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-weight: 500;
+  text-align: center;
+}
+.video-tab:hover {
+  color: var(--text);
+  background: var(--surface2);
+}
+.video-tab.active {
+  background: var(--primary);
+  color: #fff;
+}
+.video-panel {
+  display: none;
+}
+.video-panel.active {
+  display: block;
+}
+.prompt-area {
+  width: 100%;
+  min-height: 120px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.95rem;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+.prompt-area:focus {
+  border-color: var(--primary);
+}
+.param-group {
+  margin-bottom: 20px;
+}
+.param-group label {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+.duration-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.duration-row input[type="range"] {
+  flex: 1;
+}
+.duration-value {
+  min-width: 60px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--primary);
+}
+.upload-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.upload-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.upload-item .drop-zone {
+  width: 100%;
+  padding: 24px 16px;
+  min-height: 140px;
+}
+.ref-upload {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.ref-item {
+  position: relative;
+  aspect-ratio: 16/9;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  overflow: hidden;
+  background: var(--surface2);
+}
+.ref-item:hover {
+  border-color: var(--primary);
+}
+.ref-item.has-image {
+  border-style: solid;
+  border-color: var(--primary);
+}
+.ref-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ref-item .ref-label {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  right: 4px;
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  font-size: 0.75rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-align: center;
+}
+.format-info {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-top: 24px;
+}
+.format-info h3 {
+  font-size: 0.95rem;
+  margin-bottom: 12px;
+  color: var(--text);
+}
+.format-info ul {
+  list-style: none;
+  font-size: 0.85rem;
+  color: var(--text2);
+}
+.format-info li {
+  padding: 4px 0;
+  padding-left: 16px;
+  position: relative;
+}
+.format-info li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  color: var(--success);
+}
+</style>
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="/" class="nav-logo">FlowConvert</a>
+    <div class="nav-links">
+      <a href="/">格式转换</a>
+      <a href="/idphoto">证件照</a>
+      <a href="/translate">翻译</a>
+      <a href="/video" class="active">视频生成</a>
+      <a href="/image">图像生成</a>
+      <a href="/about">常见问题</a>
+      <a href="/donate">赞赏支持</a>
+    </div>
+  </div>
+</nav>
+
+<main class="container">
+  <div class="hero">
+    <h1>视频生成工具</h1>
+    <p class="subtitle">AI 驱动的视频创作，支持多种生成模式，符合主流平台上传要求</p>
+  </div>
+
+  <!-- 模式切换 -->
+  <div class="video-tabs">
+    <button class="video-tab active" data-mode="text">纯文本生成</button>
+    <button class="video-tab" data-mode="keyframe">首尾帧控制</button>
+    <button class="video-tab" data-mode="ref">参考图生成</button>
+  </div>
+
+  <!-- 纯文本生成 -->
+  <div id="text-mode" class="video-panel active">
+    <div class="param-group">
+      <label>描述视频内容</label>
+      <textarea class="prompt-area" id="textPrompt" placeholder="描述你想要的视频内容，例如：一个宁静的湖畔，夕阳西下，湖面倒映着晚霞，远处有飞鸟掠过..."></textarea>
+    </div>
+    <div class="param-group">
+      <label>视频时长 <span class="duration-value" id="durationValue">30</span> 秒</label>
+      <input type="range" id="durationSlider" min="5" max="60" value="30" step="5">
+    </div>
+    <div class="param-group">
+      <label>分辨率</label>
+      <select id="textResolution" class="select">
+        <option value="1080p">1080p (1920×1080)</option>
+        <option value="720p">720p (1280×720)</option>
+        <option value="480p">480p (854×480)</option>
+      </select>
+    </div>
+    <button id="textGenerateBtn" class="btn btn-primary" disabled>生成视频</button>
+  </div>
+
+  <!-- 首尾帧控制 -->
+  <div id="keyframe-mode" class="video-panel">
+    <div class="upload-grid">
+      <div class="upload-item">
+        <label style="font-size:0.9rem;font-weight:500;">首帧图片</label>
+        <div class="drop-zone" id="firstFrameZone">
+          <div class="drop-content">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+              <circle cx="9" cy="9" r="2"/>
+              <path d="m21 15-5-5L5 21"/>
+            </svg>
+            <p>上传首帧</p>
+          </div>
+          <input type="file" id="firstFrameInput" accept=".jpg,.jpeg,.png,.webp" hidden>
+        </div>
+      </div>
+      <div class="upload-item">
+        <label style="font-size:0.9rem;font-weight:500;">尾帧图片</label>
+        <div class="drop-zone" id="lastFrameZone">
+          <div class="drop-content">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+              <circle cx="9" cy="9" r="2"/>
+              <path d="m21 15-5-5L5 21"/>
+            </svg>
+            <p>上传尾帧</p>
+          </div>
+          <input type="file" id="lastFrameInput" accept=".jpg,.jpeg,.png,.webp" hidden>
+        </div>
+      </div>
+    </div>
+    <div class="param-group">
+      <label>过渡描述（可选）</label>
+      <textarea class="prompt-area" id="keyframePrompt" placeholder="描述首尾帧之间的过渡效果，例如：从白天渐变到夜晚..." style="min-height:80px;"></textarea>
+    </div>
+    <div class="param-group">
+      <label>视频时长 <span class="duration-value" id="kfDurationValue">10</span> 秒</label>
+      <input type="range" id="kfDurationSlider" min="5" max="60" value="10" step="5">
+    </div>
+    <button id="keyframeGenerateBtn" class="btn btn-primary" disabled>生成视频</button>
+  </div>
+
+  <!-- 参考图生成 -->
+  <div id="ref-mode" class="video-panel">
+    <div class="param-group">
+      <label>描述视频内容</label>
+      <textarea class="prompt-area" id="refPrompt" placeholder="描述你想要的视频内容..."></textarea>
+    </div>
+    <div class="param-group">
+      <label>参考图片（可选，最多3张）</label>
+      <div class="ref-upload">
+        <div class="ref-item" id="refItem1">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="0">
+          <span class="ref-label">参考图1</span>
+        </div>
+        <div class="ref-item" id="refItem2">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="1">
+          <span class="ref-label">参考图2</span>
+        </div>
+        <div class="ref-item" id="refItem3">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="2">
+          <span class="ref-label">参考图3</span>
+        </div>
+      </div>
+    </div>
+    <div class="param-group">
+      <label>参考类型</label>
+      <select id="refType" class="select">
+        <option value="motion">运动参考</option>
+        <option value="style">风格参考</option>
+        <option value="both">运动+风格</option>
+      </select>
+    </div>
+    <div class="param-group">
+      <label>视频时长 <span class="duration-value" id="refDurationValue">30</span> 秒</label>
+      <input type="range" id="refDurationSlider" min="5" max="60" value="30" step="5">
+    </div>
+    <button id="refGenerateBtn" class="btn btn-primary" disabled>生成视频</button>
+  </div>
+
+  <!-- 状态区 -->
+  <div id="status" class="status-panel" hidden>
+    <div class="spinner"></div>
+    <p id="statusText">正在生成视频...</p>
+  </div>
+
+  <!-- 结果区 -->
+  <div id="result" class="result-panel" hidden>
+    <div class="result-icon">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2">
+        <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+        <polyline points="22 4 12 14.01 9 11.01"/>
+      </svg>
+    </div>
+    <p id="resultText">视频生成成功！</p>
+    <video id="resultVideo" controls style="width:100%;border-radius:var(--radius);margin-bottom:16px;display:none;"></video>
+    <a id="downloadLink" class="btn btn-success" download>下载视频</a>
+    <button id="resetBtn" class="btn btn-secondary" style="margin-left:8px;">重新生成</button>
+  </div>
+
+  <!-- 格式说明 -->
+  <div class="format-info">
+    <h3>平台适配说明</h3>
+    <ul>
+      <li>抖音/快手：竖屏 9:16，分辨率 1080×1920，时长建议 15-60 秒</li>
+      <li>B站/YouTube：横屏 16:9，分辨率 1920×1080，支持 4K</li>
+      <li>小红书：竖屏 3:4 或 9:16，分辨率 1080×1440</li>
+      <li>输出格式：MP4 (H.264)，支持所有主流平台上传</li>
+    </ul>
+  </div>
+</main>
+
+<footer class="footer">
+  <p>FlowConvert &copy; 2026 · 基于 Go + OpenCode 构建 · 反馈：647133036@qq.com</p>
+</footer>
+
+<script>
+// ── State ──
+let currentMode = 'text';
+let isGenerating = false;
+let firstFrameFile = null;
+let lastFrameFile = null;
+let refFiles = [];
+
+// ── DOM refs ──
+const els = {};
+function $(id) { return document.getElementById(id); }
+
+document.addEventListener('DOMContentLoaded', () => {
+  els.textPrompt = $('textPrompt');
+  els.durationSlider = $('durationSlider');
+  els.durationValue = $('durationValue');
+  els.textGenerateBtn = $('textGenerateBtn');
+  
+  els.firstFrameZone = $('firstFrameZone');
+  els.firstFrameInput = $('firstFrameInput');
+  els.lastFrameZone = $('lastFrameZone');
+  els.lastFrameInput = $('lastFrameInput');
+  els.keyframePrompt = $('keyframePrompt');
+  els.kfDurationSlider = $('kfDurationSlider');
+  els.kfDurationValue = $('durationValue');
+  els.keyframeGenerateBtn = $('keyframeGenerateBtn');
+  
+  els.refPrompt = $('refPrompt');
+  els.refType = $('refType');
+  els.refDurationSlider = $('refDurationSlider');
+  els.refDurationValue = $('durationValue');
+  els.refGenerateBtn = $('refGenerateBtn');
+  
+  els.status = $('status');
+  els.statusText = $('statusText');
+  els.result = $('result');
+  els.resultText = $('resultText');
+  els.resultVideo = $('resultVideo');
+  els.downloadLink = $('downloadLink');
+  els.resetBtn = $('resetBtn');
+
+  // Video tabs
+  document.querySelectorAll('.video-tab').forEach(btn => {
+    btn.addEventListener('click', () => switchMode(btn.dataset.mode));
+  });
+
+  // Duration sliders
+  els.durationSlider.addEventListener('input', () => {
+    els.durationValue.textContent = els.durationSlider.value;
+  });
+  els.kfDurationSlider.addEventListener('input', () => {
+    $('kfDurationValue').textContent = els.kfDurationSlider.value;
+  });
+  els.refDurationSlider.addEventListener('input', () => {
+    $('refDurationValue').textContent = els.refDurationSlider.value;
+  });
+
+  // Text mode
+  setupDropZone(els.firstFrameZone, els.firstFrameInput, handleFirstFrame);
+  setupDropZone(els.lastFrameZone, els.lastFrameInput, handleLastFrame);
+  
+  els.textPrompt.addEventListener('input', updateTextBtn);
+  els.textGenerateBtn.addEventListener('click', generateTextVideo);
+  
+  els.keyframeGenerateBtn.addEventListener('click', generateKeyframeVideo);
+  els.refGenerateBtn.addEventListener('click', generateRefVideo);
+  els.resetBtn.addEventListener('click', resetAll);
+  
+  // Ref uploads
+  document.querySelectorAll('.ref-input').forEach(input => {
+    input.addEventListener('change', e => handleRefUpload(e));
+  });
+});
+
+function switchMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.video-tab').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  document.querySelectorAll('.video-panel').forEach(p => p.classList.remove('active'));
+  $(mode + '-mode').classList.add('active');
+  hideResult();
+}
+
+function setupDropZone(zone, fileInput, callback) {
+  zone.addEventListener('click', () => fileInput.click());
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    if (e.dataTransfer.files.length > 0) callback(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', e => {
+    if (e.target.files.length > 0) callback(e.target.files[0]);
+  });
+}
+
+function handleFirstFrame(file) {
+  firstFrameFile = file;
+  updatePreview(els.firstFrameZone, file, '首帧');
+  updateKeyframeBtn();
+}
+
+function handleLastFrame(file) {
+  lastFrameFile = file;
+  updatePreview(els.lastFrameZone, file, '尾帧');
+  updateKeyframeBtn();
+}
+
+function updatePreview(zone, file, label) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    zone.querySelector('.drop-content').innerHTML = `
+      <img src="${e.target.result}" style="max-width:100%;max-height:100px;border-radius:4px;">
+      <p style="color:#22c55e;margin-top:8px;">${file.name}</p>
+    `;
+  };
+  reader.readAsDataURL(file);
+}
+
+function updateTextBtn() {
+  els.textGenerateBtn.disabled = !els.textPrompt.value.trim();
+}
+
+function updateKeyframeBtn() {
+  els.keyframeGenerateBtn.disabled = !(firstFrameFile && lastFrameFile);
+}
+
+function handleRefUpload(e) {
+  const idx = parseInt(e.target.dataset.index);
+  const file = e.target.files[0];
+  if (!file) return;
+  refFiles[idx] = file;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const item = document.getElementById('refItem' + (idx + 1));
+    item.classList.add('has-image');
+    item.innerHTML = `<img src="${ev.target.result}"><span class="ref-label">${idx + 1}</span>`;
+    item.querySelector('input').addEventListener('change', handleRefUpload);
+  };
+  reader.readAsDataURL(file);
+  updateRefBtn();
+}
+
+function updateRefBtn() {
+  els.refGenerateBtn.disabled = !els.refPrompt.value.trim();
+}
+els.refPrompt?.addEventListener('input', updateRefBtn);
+
+async function generateTextVideo() {
+  if (isGenerating) return;
+  isGenerating = true;
+  showStatus('正在生成视频，请稍候...');
+  try {
+    const formData = new FormData();
+    formData.append('prompt', els.textPrompt.value);
+    formData.append('duration', els.durationSlider.value);
+    formData.append('resolution', els.textResolution.value);
+    
+    const resp = await fetch('/api/convert/video/text', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await resp.json();
+    
+    if (data.success) {
+      const url = '/api/download/' + data.download_url.split('/').pop();
+      $('resultVideo').src = url;
+      $('downloadLink').href = url;
+      showResult('视频生成成功！');
+    } else {
+      showError(data.error || '生成失败');
+    }
+  } catch (err) {
+    showError(err.message || '生成失败，请重试');
+  } finally {
+    isGenerating = false;
+  }
+}
+
+async function generateKeyframeVideo() {
+  if (isGenerating) return;
+  isGenerating = true;
+  showStatus('正在生成视频...');
+  try {
+    const formData = new FormData();
+    formData.append('first_frame', firstFrameFile);
+    formData.append('last_frame', lastFrameFile);
+    formData.append('prompt', els.keyframePrompt.value);
+    formData.append('duration', els.kfDurationSlider.value);
+    
+    const resp = await fetch('/api/convert/video/keyframe', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await resp.json();
+    
+    if (data.success) {
+      const url = '/api/download/' + data.download_url.split('/').pop();
+      $('resultVideo').src = url;
+      $('downloadLink').href = url;
+      showResult('视频生成成功！');
+    } else {
+      showError(data.error || '生成失败');
+    }
+  } catch (err) {
+    showError(err.message || '生成失败，请重试');
+  } finally {
+    isGenerating = false;
+  }
+}
+
+async function generateRefVideo() {
+  if (isGenerating) return;
+  isGenerating = true;
+  showStatus('正在生成视频...');
+  try {
+    const formData = new FormData();
+    formData.append('prompt', els.refPrompt.value);
+    formData.append('ref_type', els.refType.value);
+    formData.append('duration', els.refDurationSlider.value);
+    refFiles.forEach((file, idx) => {
+      if (file) formData.append('ref_' + idx, file);
+    });
+    
+    const resp = await fetch('/api/convert/video/ref', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await resp.json();
+    
+    if (data.success) {
+      const url = '/api/download/' + data.download_url.split('/').pop();
+      $('resultVideo').src = url;
+      $('downloadLink').href = url;
+      showResult('视频生成成功！');
+    } else {
+      showError(data.error || '生成失败');
+    }
+  } catch (err) {
+    showError(err.message || '生成失败，请重试');
+  } finally {
+    isGenerating = false;
+  }
+}
+
+function showStatus(text) {
+  els.status.hidden = false;
+  els.result.hidden = true;
+  els.statusText.textContent = text;
+}
+
+function showResult(text) {
+  els.status.hidden = true;
+  els.result.hidden = false;
+  els.resultText.textContent = text;
+}
+
+function showError(msg) {
+  els.status.hidden = true;
+  els.result.hidden = false;
+  els.resultText.textContent = msg;
+  els.resultText.style.color = '#ef4444';
+}
+
+function hideResult() {
+  els.status.hidden = true;
+  els.result.hidden = true;
+}
+
+function resetAll() {
+  hideResult();
+  firstFrameFile = null;
+  lastFrameFile = null;
+  refFiles = [];
+  els.textPrompt.value = '';
+  els.keyframePrompt.value = '';
+  els.refPrompt.value = '';
+  els.durationSlider.value = 30;
+  els.kfDurationSlider.value = 10;
+  els.refDurationSlider.value = 30;
+  els.durationValue.textContent = '30';
+  $('kfDurationValue').textContent = '10';
+  $('refDurationValue').textContent = '30';
+  els.textGenerateBtn.disabled = true;
+  els.keyframeGenerateBtn.disabled = true;
+  els.refGenerateBtn.disabled = true;
+  
+  // Reset drop zones
+  els.firstFrameZone.querySelector('.drop-content').innerHTML = `
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+      <circle cx="9" cy="9" r="2"/>
+      <path d="m21 15-5-5L5 21"/>
+    </svg>
+    <p>上传首帧</p>
+  `;
+  els.lastFrameZone.querySelector('.drop-content').innerHTML = `
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+      <circle cx="9" cy="9" r="2"/>
+      <path d="m21 15-5-5L5 21"/>
+    </svg>
+    <p>上传尾帧</p>
+  `;
+  
+  // Reset ref items
+  for (let i = 1; i <= 3; i++) {
+    const item = document.getElementById('refItem' + i);
+    item.classList.remove('has-image');
+    item.innerHTML = `<input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="${i-1}"><span class="ref-label">参考图${i}</span>`;
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+# Build output
+flowConvert
+flowconvert
+*.exe
+
+# Data
+data/output/
+
+# Test artifacts
+*_test.png
+*_test.pdf
+fixed_*.png
+result_*.png
+idphoto_*_final.png
+real_id2_test.png
+test_idphoto.png
+test_fullbody*.png
+test_halfbody*.png
+web/test_*.png
+
+# Python cache
+scripts/__pycache__/
+*.pyc
+
+# Model files (large binary)
+models/*.onnx
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,354 @@
+package handler
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"mime"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"flowconvert/internal/config"
+	"flowconvert/internal/service"
+)
+
+// ConvertH includes all dependencies for conversion handlers.
+type ConvertH struct {
+	Cfg   *config.Config
+	Store *FileStore
+}
+
+func (c *ConvertH) writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (c *ConvertH) writeErr(w http.ResponseWriter, status int, msg string) {
+	c.writeJSON(w, status, map[string]interface{}{"success": false, "error": msg})
+}
+
+// saveUpload saves an uploaded file into a tmp dir, validating size and type
+// based on the expected format list.
+func (c *ConvertH) saveUpload(r *http.Request, field string, allowExts []string) (string, string, error) {
+	if err := r.ParseMultipartForm(c.Cfg.MaxSize + 1<<20); err != nil {
+		return "", "", fmt.Errorf("上传文件过大或参数错误")
+	}
+	file, header, err := r.FormFile(field)
+	if err != nil {
+		return "", "", fmt.Errorf("请选择要上传的文件")
+	}
+	defer file.Close()
+	if header.Size > c.Cfg.MaxSize {
+		return "", "", fmt.Errorf("文件超过 50MB 限制")
+	}
+
+	// Read first 512 bytes for magic
+	buf := make([]byte, 512)
+	n, _ := io.ReadFull(file, buf)
+	if n < 4 {
+		return "", "", fmt.Errorf("文件内容无效")
+	}
+	// rewind
+	if seeker, ok := file.(io.Seeker); ok {
+		_, _ = seeker.Seek(0, io.SeekStart)
+	}
+	ctype := http.DetectContentType(buf[:n])
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(header.Filename)), ".")
+	if !allowedType(ext, ctype, allowExts) {
+		return "", "", fmt.Errorf("不支持的文件类型: .%s", ext)
+	}
+
+	tmpName := fmt.Sprintf("up_%s.%s", strconv.FormatInt(time.Now().UnixNano(), 10), ext)
+	tmpPath := filepath.Join(c.Cfg.TmpDir, tmpName)
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return "", "", fmt.Errorf("服务器错误，请重试")
+	}
+	defer f.Close()
+	total, err := io.Copy(f, io.LimitReader(file, c.Cfg.MaxSize+1))
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return "", "", fmt.Errorf("文件保存失败")
+	}
+	if total > c.Cfg.MaxSize {
+		_ = os.Remove(tmpPath)
+		return "", "", fmt.Errorf("文件超过 50MB 限制")
+	}
+	return tmpPath, ext, nil
+}
+
+func allowedType(ext, ctype string, allow []string) bool {
+	for _, a := range allow {
+		if ext == a {
+			return true
+		}
+	}
+	// also check mime prefix
+	for _, a := range allow {
+		m := mime.TypeByExtension("." + a)
+		if m != "" && strings.HasPrefix(ctype, strings.Split(m, ";")[0]) {
+			return true
+		}
+	}
+	return false
+}
+
+// newTmp creates a per-request working directory.
+func (c *ConvertH) newTmp() (string, error) {
+	dir := filepath.Join(c.Cfg.TmpDir, "w_"+service.NewID(8))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func (c *ConvertH) cleanupTmp(dir string) {
+	_ = os.RemoveAll(dir)
+}
+
+func (c *ConvertH) registerOutput(path, base string) (string, error) {
+	urlPath := c.Store.Register(path, base)
+	return urlPath, nil
+}
+
+// ── Image → Vector ──
+
+var imageExts = []string{"jpg", "jpeg", "png", "bmp", "tiff", "tif", "webp", "gif"}
+
+func (c *ConvertH) HandleUploadVectorize(w http.ResponseWriter, r *http.Request) {
+	src, ext, err := c.saveUpload(r, "file", imageExts)
+	if err != nil {
+		c.writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer os.Remove(src)
+
+	tmp, err := c.newTmp()
+	if err != nil {
+		c.writeErr(w, http.StatusInternalServerError, "服务器错误")
+		return
+	}
+	defer c.cleanupTmp(tmp)
+	_ = ext
+
+	params := parseVecParams(r)
+	output := r.FormValue("output")
+	if output == "" {
+		output = "svg"
+	}
+
+	dest, err := service.Vectorize(tmp, src, output, params)
+	if err != nil {
+		c.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	dl, err := c.registerOutput(dest, "converted."+output)
+	if err != nil {
+		c.writeErr(w, http.StatusInternalServerError, "服务器错误")
+		return
+	}
+	c.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":      true,
+		"download_url": dl,
+		"format":       output,
+	})
+}
+
+func parseVecParams(r *http.Request) service.VecParams {
+	ci, _ := strconv.Atoi(r.FormValue("color_precision"))
+	fs, _ := strconv.Atoi(r.FormValue("filter_speckle"))
+	ct, _ := strconv.Atoi(r.FormValue("corner_threshold"))
+	return service.VecParams{
+		Mode:            r.FormValue("mode"),
+		ColorPrecision:  ci,
+		FilterSpeckle:   fs,
+		CornerThreshold: ct,
+	}
+}
+
+func (c *ConvertH) HandleURLVectorize(w http.ResponseWriter, r *http.Request) {
+	url := r.URL.Query().Get("url")
+	output := r.URL.Query().Get("output")
+	if output == "" {
+		output = "svg"
+	}
+	params := service.VecParams{
+		Mode:            r.URL.Query().Get("mode"),
+		ColorPrecision:  parseIntDefault(r.URL.Query().Get("color_precision"), 6),
+		FilterSpeckle:   parseIntDefault(r.URL.Query().Get("filter_speckle"), 4),
+		CornerThreshold: parseIntDefault(r.URL.Query().Get("corner_threshold"), 60),
+	}
+
+	tmp, err := c.newTmp()
+	if err != nil {
+		c.writeErr(w, http.StatusInternalServerError, "服务器错误")
+		return
+	}
+	defer c.cleanupTmp(tmp)
+
+	src, err := service.FetchImage(tmp, url, c.Cfg.MaxURL)
+	if err != nil {
+		c.writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer os.Remove(src)
+
+	dest, err := service.Vectorize(tmp, src, output, params)
+	if err != nil {
+		c.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	dl, err := c.registerOutput(dest, "converted."+output)
+	if err != nil {
+		c.writeErr(w, http.StatusInternalServerError, "服务器错误")
+		return
+	}
+	c.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":      true,
+		"download_url": dl,
+		"format":       output,
+	})
+}
+
+func parseIntDefault(v string, def int) int {
+	if v == "" {
+		return def
+	}
+	i, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return i
+}
+
+// ── PDF → Office ──
+
+func (c *ConvertH) HandlePdfToOffice(w http.ResponseWriter, r *http.Request) {
+	src, ext, err := c.saveUpload(r, "file", []string{"pdf"})
+	if err != nil {
+		c.writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer os.Remove(src)
+	_ = ext
+
+	tmp, err := c.newTmp()
+	if err != nil {
+		c.writeErr(w, http.StatusInternalServerError, "服务器错误")
+		return
+	}
+	defer c.cleanupTmp(tmp)
+
+	output := r.FormValue("output")
+	if output == "" {
+		output = "docx"
+	}
+	dest, err := service.PdfToOffice(tmp, src, output)
+	if err != nil {
+		c.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	dl, err := c.registerOutput(dest, "converted."+output)
+	if err != nil {
+		c.writeErr(w, http.StatusInternalServerError, "服务器错误")
+		return
+	}
+	c.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":      true,
+		"download_url": dl,
+		"format":       output,
+	})
+}
+
+// ── Sketch ──
+
+func (c *ConvertH) HandleSketch(w http.ResponseWriter, r *http.Request) {
+	src, ext, err := c.saveUpload(r, "file", imageExts)
+	if err != nil {
+		c.writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer os.Remove(src)
+	_ = ext
+
+	tmp, err := c.newTmp()
+	if err != nil {
+		c.writeErr(w, http.StatusInternalServerError, "服务器错误")
+		return
+	}
+	defer c.cleanupTmp(tmp)
+
+	sigma, _ := strconv.ParseFloat(r.FormValue("sigma"), 64)
+	dest, err := service.MakeSketch(tmp, src, sigma)
+	if err != nil {
+		c.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	dl, err := c.registerOutput(dest, "sketch.png")
+	if err != nil {
+		c.writeErr(w, http.StatusInternalServerError, "服务器错误")
+		return
+	}
+	c.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":      true,
+		"download_url": dl,
+		"format":       "png",
+	})
+}
+
+// ── ID Photo ──
+
+func (c *ConvertH) HandleIdPhoto(w http.ResponseWriter, r *http.Request) {
+	src, ext, err := c.saveUpload(r, "file", imageExts)
+	if err != nil {
+		c.writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer os.Remove(src)
+	_ = ext
+
+	size := r.FormValue("size")
+	bg := r.FormValue("bg_color")
+
+	tmp, err := c.newTmp()
+	if err != nil {
+		c.writeErr(w, http.StatusInternalServerError, "服务器错误")
+		return
+	}
+	defer c.cleanupTmp(tmp)
+
+	dest, err := service.MakeIdPhoto(tmp, src, size, bg)
+	if err != nil {
+		c.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	defer os.Remove(dest)
+
+	// Serve the image directly
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		c.writeErr(w, http.StatusInternalServerError, "读取结果文件失败")
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Disposition", `attachment; filename="证件照.png"`)
+	_, _ = w.Write(data)
+}
+
+// ── Formats info ──
+
+func (c *ConvertH) HandleFormats(w http.ResponseWriter, r *http.Request) {
+	c.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":        true,
+		"image_input":    []string{"jpg", "png", "bmp", "tiff", "webp", "gif"},
+		"vector_output": []string{"svg", "ai", "dxf", "eps", "fig", "sk", "pdf"},
+		"pdf_output":     []string{"docx", "xlsx"},
+		"max_upload_mb":  50,
+		"max_url_mb":     20,
+	})
+}

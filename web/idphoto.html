@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlowConvert - 证件照工具</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="/" class="nav-logo">FlowConvert</a>
+    <div class="nav-links">
+      <a href="/">格式转换</a>
+      <a href="/idphoto" class="active">证件照</a>
+      <a href="/translate">翻译</a>
+      <a href="/video">视频生成</a>
+      <a href="/image">图像生成</a>
+      <a href="/about">常见问题</a>
+      <a href="/donate">赞赏支持</a>
+    </div>
+  </div>
+</nav>
+
+<main class="container">
+  <div class="hero">
+    <h1>📷 在线证件照工具</h1>
+    <p class="subtitle">上传照片，选择尺寸和背景色，一键生成标准证件照</p>
+  </div>
+
+  <div class="idphoto-grid">
+    <!-- 左侧：上传+预览 -->
+    <div>
+      <div class="drop-zone" id="idDropZone" style="margin-bottom:1rem;">
+        <div class="drop-content">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p>拖拽照片到此处，或 <span class="link">点击选择</span></p>
+          <p class="hint">支持 JPG / PNG / BMP / WebP，建议使用正面免冠照片</p>
+        </div>
+        <input type="file" id="idFileInput" accept=".jpg,.jpeg,.png,.bmp,.webp" hidden>
+      </div>
+
+      <div class="idphoto-preview" id="idPreview">
+        <div class="placeholder" id="idPlaceholder">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="1.5">
+            <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 00-3-3.87"/>
+            <path d="M16 3.13a4 4 0 010 7.75"/>
+          </svg>
+          <p style="margin-top:0.5rem;">请上传照片</p>
+        </div>
+        <img id="idPreviewImg" style="display:none;" alt="预览">
+      </div>
+    </div>
+
+    <!-- 右侧：参数设置 -->
+    <div class="idphoto-params">
+      <!-- 尺寸选择 -->
+      <div class="param-group">
+        <label>📏 证件照尺寸</label>
+        <div class="size-grid" id="sizeGrid">
+          <button class="size-btn" data-size="一寸">一寸<span class="size-mm">25×35mm</span></button>
+          <button class="size-btn" data-size="小一寸">小一寸<span class="size-mm">22×32mm</span></button>
+          <button class="size-btn active" data-size="大一寸">大一寸<span class="size-mm">33×48mm</span></button>
+          <button class="size-btn" data-size="小二寸">小二寸<span class="size-mm">35×45mm</span></button>
+          <button class="size-btn" data-size="二寸">二寸<span class="size-mm">35×49mm</span></button>
+          <button class="size-btn" data-size="大二寸">大二寸<span class="size-mm">40×50mm</span></button>
+          <button class="size-btn" data-size="美签">美签<span class="size-mm">51×51mm</span></button>
+          <button class="size-btn" data-size="小三寸">小三寸<span class="size-mm">35×45mm</span></button>
+          <button class="size-btn" data-size="三寸">三寸<span class="size-mm">55×84mm</span></button>
+          <button class="size-btn" data-size="社保">社保<span class="size-mm">32×36mm</span></button>
+          <button class="size-btn" data-size="教资">教资<span class="size-mm">25×35mm</span></button>
+          <button class="size-btn" data-size="公务员">公务员<span class="size-mm">25×35mm</span></button>
+          <button class="size-btn" data-size="四六级">四六级<span class="size-mm">57×76mm</span></button>
+          <button class="size-btn" data-size="日语">日语<span class="size-mm">30×42mm</span></button>
+          <button class="size-btn" data-size="五寸">五寸<span class="size-mm">89×127mm</span></button>
+          <button class="size-btn" data-size="六寸">六寸<span class="size-mm">102×152mm</span></button>
+        </div>
+      </div>
+
+      <!-- 背景色选择 -->
+      <div class="param-group">
+        <label>🎨 背景颜色</label>
+        <div class="color-grid" id="colorGrid">
+          <button class="color-btn active" data-color="白色" style="background:#fff;border-color:#ccc;">
+            <span class="color-label">白色</span>
+          </button>
+          <button class="color-btn" data-color="蓝色" style="background:#0072E3;">
+            <span class="color-label">蓝色</span>
+          </button>
+          <button class="color-btn" data-color="深蓝" style="background:#0051AE;">
+            <span class="color-label">深蓝</span>
+          </button>
+          <button class="color-btn" data-color="红色" style="background:#ED1C24;">
+            <span class="color-label">红色</span>
+          </button>
+          <button class="color-btn" data-color="粉色" style="background:#FFB6C1;">
+            <span class="color-label">粉色</span>
+          </button>
+          <button class="color-btn" data-color="灰色" style="background:#BFBFBF;">
+            <span class="color-label">灰色</span>
+          </button>
+          <button class="color-btn" data-color="浅蓝" style="background:#ADD8E6;">
+            <span class="color-label">浅蓝</span>
+          </button>
+          <button class="color-btn" data-color="青色" style="background:#00BFFF;">
+            <span class="color-label">青色</span>
+          </button>
+        </div>
+      </div>
+
+      <button id="idConvertBtn" class="btn btn-primary" disabled style="width:100%;padding:1rem;font-size:1.1rem;">
+        📸 生成证件照
+      </button>
+    </div>
+  </div>
+
+  <!-- 状态区 -->
+  <div id="status" class="status-panel" hidden>
+    <div class="spinner"></div>
+    <p id="statusText">🖼️ 正在处理，这可能需要10-30秒...</p>
+  </div>
+
+  <!-- 结果区 -->
+  <div id="result" class="result-panel" hidden>
+    <div class="result-icon" id="resultIcon">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2">
+        <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+        <polyline points="22 4 12 14.01 9 11.01"/>
+      </svg>
+    </div>
+    <p id="resultText">证件照生成成功！</p>
+    <div class="idphoto-result">
+      <div class="idphoto-preview" id="resultPreview" style="border-style:solid;">
+        <img id="resultPreviewImg" alt="证件照结果">
+      </div>
+      <a id="downloadLink" class="btn btn-success" download>📥 下载证件照</a>
+    </div>
+    <button id="resetBtn" class="btn btn-secondary" style="margin-top:0.5rem;">继续制作</button>
+  </div>
+</main>
+
+<footer class="footer">
+  <p>FlowConvert &copy; 2026 · 基于 Go + Python 构建 · 反馈：647133036@qq.com</p>
+  <p style="margin-top:6px;font-size:13px;"><a href="https://beian.miit.gov.cn" target="_blank" rel="noopener">桂ICP备XXXXXX号-X</a> · <a href="https://beian.mps.gov.cn/#/query/webSearch?code=桂公网安备XXXXXXXXXXXXXXX号" target="_blank">桂公网安备XXXXXXXXXXXXXXX号</a></p>
+</footer>
+
+<script>
+// ── DOM ──
+const $ = id => document.getElementById(id);
+
+const els = {
+  dropZone: $('idDropZone'),
+  fileInput: $('idFileInput'),
+  preview: $('idPreview'),
+  previewImg: $('idPreviewImg'),
+  placeholder: $('idPlaceholder'),
+  sizeGrid: $('sizeGrid'),
+  colorGrid: $('colorGrid'),
+  convertBtn: $('idConvertBtn'),
+  status: $('status'),
+  statusText: $('statusText'),
+  result: $('result'),
+  resultIcon: $('resultIcon'),
+  resultText: $('resultText'),
+  resultPreview: $('resultPreview'),
+  resultPreviewImg: $('resultPreviewImg'),
+  downloadLink: $('downloadLink'),
+  resetBtn: $('resetBtn'),
+};
+
+let selectedFile = null;
+let selectedSize = '大一寸';
+let selectedColor = '白色';
+let isConverting = false;
+
+// ── 拖拽上传 ──
+els.dropZone.addEventListener('click', () => els.fileInput.click());
+
+els.dropZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  els.dropZone.style.borderColor = '#6366f1';
+  els.dropZone.style.background = 'rgba(99,102,241,0.05)';
+});
+
+els.dropZone.addEventListener('dragleave', () => {
+  els.dropZone.style.borderColor = '';
+  els.dropZone.style.background = '';
+});
+
+els.dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  els.dropZone.style.borderColor = '';
+  els.dropZone.style.background = '';
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+
+els.fileInput.addEventListener('change', () => {
+  if (els.fileInput.files[0]) handleFile(els.fileInput.files[0]);
+});
+
+function handleFile(file) {
+  if (!file.type.match(/^image\//)) {
+    alert('请选择图片文件');
+    return;
+  }
+  if (file.size > 20 * 1024 * 1024) {
+    alert('文件过大，最大 20MB');
+    return;
+  }
+  selectedFile = file;
+  els.convertBtn.disabled = false;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    els.previewImg.src = e.target.result;
+    els.previewImg.style.display = 'block';
+    els.placeholder.style.display = 'none';
+  };
+  reader.readAsDataURL(file);
+}
+
+// ── 尺寸选择 ──
+els.sizeGrid.addEventListener('click', (e) => {
+  const btn = e.target.closest('.size-btn');
+  if (!btn) return;
+  els.sizeGrid.querySelectorAll('.size-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  selectedSize = btn.dataset.size;
+});
+
+// ── 颜色选择 ──
+els.colorGrid.addEventListener('click', (e) => {
+  const btn = e.target.closest('.color-btn');
+  if (!btn) return;
+  els.colorGrid.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  selectedColor = btn.dataset.color;
+});
+
+// ── 生成 ──
+els.convertBtn.addEventListener('click', async () => {
+  if (isConverting || !selectedFile) return;
+  isConverting = true;
+  els.status.hidden = false;
+  els.result.hidden = true;
+  els.statusText.textContent = '🖼️ 正在处理，这可能需要10-30秒...';
+
+  try {
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    formData.append('size', selectedSize);
+    formData.append('bg_color', selectedColor);
+
+    const resp = await fetch('/api/convert/idphoto', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!resp.ok) {
+      const errData = await resp.json().catch(() => ({}));
+      throw new Error(errData.error || `生成失败 (HTTP ${resp.status})`);
+    }
+
+    const blob = await resp.blob();
+    const blobUrl = URL.createObjectURL(blob);
+
+    els.status.hidden = true;
+    els.result.hidden = false;
+    els.resultText.textContent = `✅ 证件照生成成功！${selectedSize} / ${selectedColor}底`;
+    els.resultPreviewImg.src = blobUrl;
+
+    const filename = `证件照_${selectedSize}_${selectedColor}底.png`;
+    els.downloadLink.href = blobUrl;
+    els.downloadLink.download = filename;
+
+  } catch (err) {
+    els.status.hidden = true;
+    els.result.hidden = false;
+    els.resultIcon.innerHTML = `
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="15" y1="9" x2="9" y2="15"/>
+        <line x1="9" y1="9" x2="15" y2="15"/>
+      </svg>`;
+    els.resultText.textContent = '❌ ' + (err.message || '生成失败');
+    els.resultText.style.color = '#ef4444';
+    els.downloadLink.style.display = 'none';
+  } finally {
+    isConverting = false;
+  }
+});
+
+// ── 重置 ──
+els.resetBtn.addEventListener('click', () => {
+  els.result.hidden = true;
+  els.status.hidden = true;
+  els.resultText.style.color = '';
+  els.downloadLink.style.display = '';
+  selectedFile = null;
+  els.convertBtn.disabled = true;
+  els.previewImg.style.display = 'none';
+  els.placeholder.style.display = 'block';
+  els.previewImg.src = '';
+  els.fileInput.value = '';
+});
+</script>
+</body>
+</html>

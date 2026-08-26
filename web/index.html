@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlowConvert - 格式转换平台</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="/" class="nav-logo">FlowConvert</a>
+    <div class="nav-links">
+      <a href="/" class="active">格式转换</a>
+      <a href="/idphoto">证件照</a>
+      <a href="/translate">翻译</a>
+      <a href="/video">视频生成</a>
+      <a href="/image">图像生成</a>
+      <a href="/about">常见问题</a>
+      <a href="/donate">赞赏支持</a>
+    </div>
+  </div>
+</nav>
+
+<main class="container">
+  <div class="hero">
+    <h1>图片转矢量 / PDF转Office</h1>
+    <p class="subtitle">免费在线格式转换，无需注册，上传即用</p>
+  </div>
+
+  <!-- 模式切换 -->
+  <div class="mode-tabs">
+    <button class="tab-btn active" data-mode="image">图片 → 矢量/PDF</button>
+    <button class="tab-btn" data-mode="pdf">PDF → Office</button>
+    <button class="tab-btn" data-mode="sketch">🎨 图片 → 素描</button>
+  </div>
+
+  <!-- 图片转换模式 -->
+  <div id="image-mode" class="mode-panel active">
+    <!-- 输入方式选择 -->
+    <div class="input-tabs">
+      <button class="tab-btn small active" data-input="upload">本地上传</button>
+      <button class="tab-btn small" data-input="url">图片链接</button>
+    </div>
+
+    <!-- 本地上传 -->
+    <div id="input-upload" class="input-panel active">
+      <div class="drop-zone" id="dropZone">
+        <div class="drop-content">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p>拖拽文件到此处，或 <span class="link">点击选择</span></p>
+          <p class="hint">支持 JPG / PNG / BMP / TIFF / WebP / GIF</p>
+        </div>
+        <input type="file" id="fileInput" accept=".jpg,.jpeg,.png,.bmp,.tiff,.tif,.webp,.gif" hidden>
+      </div>
+    </div>
+
+    <!-- URL输入 -->
+    <div id="input-url" class="input-panel">
+      <div class="url-input-group">
+        <input type="url" id="urlInput" placeholder="输入图片链接，如 https://example.com/image.png" class="url-field">
+        <button id="fetchBtn" class="btn btn-secondary" disabled>获取图片</button>
+      </div>
+      <p class="hint">支持 http/https 协议，图片大小不超过 20MB</p>
+    </div>
+
+    <!-- 格式选择 -->
+    <div class="format-section">
+      <div class="format-row">
+        <div class="format-group">
+          <label>输入格式</label>
+          <select id="inputFormat" class="select">
+            <option value="auto">自动检测</option>
+            <option value="jpg">JPG</option>
+            <option value="png">PNG</option>
+            <option value="bmp">BMP</option>
+            <option value="tiff">TIFF</option>
+            <option value="webp">WebP</option>
+            <option value="gif">GIF</option>
+          </select>
+        </div>
+        <div class="arrow">→</div>
+        <div class="format-group">
+          <label>输出格式</label>
+          <select id="outputFormat" class="select">
+            <optgroup label="矢量格式">
+              <option value="svg" selected>SVG</option>
+              <option value="ai">AI (Adobe Illustrator)</option>
+              
+              <option value="dxf">DXF (CAD)</option>
+              <option value="eps">EPS</option>
+              <option value="fig">FIG (Figma)</option>
+              <option value="sk">SK (Sketch)</option>
+            </optgroup>
+            <optgroup label="文档格式">
+              <option value="pdf">PDF</option>
+            </optgroup>
+          </select>
+        </div>
+      </div>
+      <!-- 精度设置 -->
+      <details class="precision-settings" id="precisionDetails">
+        <summary>⚙ 精度设置</summary>
+        <div class="precision-body">
+          <div class="precision-row">
+            <label>拟合模式</label>
+            <select id="precisionMode" class="select">
+              <option value="spline">样条曲线（精细）</option>
+              <option value="polygon">多边形（折线）</option>
+              <option value="pixel">像素（方块）</option>
+            </select>
+          </div>
+          <div class="precision-row">
+            <label>颜色精度 <span id="colorPrecisionVal">4</span> bit</label>
+            <input type="range" id="colorPrecision" min="2" max="8" value="4" step="1">
+            <span class="range-labels"><span>简约</span><span>精准</span></span>
+          </div>
+          <div class="precision-row">
+            <label>杂点过滤 <span id="filterSpeckleVal">8</span> px</label>
+            <input type="range" id="filterSpeckle" min="0" max="20" value="8" step="1">
+            <span class="range-labels"><span>保留细节</span><span>更平滑</span></span>
+          </div>
+          <div class="precision-row">
+            <label>拐角敏感度 <span id="cornerThresholdVal">90</span>°</label>
+            <input type="range" id="cornerThreshold" min="1" max="180" value="90" step="1">
+            <span class="range-labels"><span>圆滑</span><span>尖锐</span></span>
+          </div>
+        </div>
+      </details>
+      <button id="convertBtn" class="btn btn-primary" disabled>开始转换</button>
+    </div>
+  </div>
+
+  <!-- PDF转Office模式 -->
+  <div id="pdf-mode" class="mode-panel">
+    <div class="drop-zone" id="pdfDropZone">
+      <div class="drop-content">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+        </svg>
+        <p>拖拽PDF文件到此处，或 <span class="link">点击选择</span></p>
+        <p class="hint">支持 PDF 格式</p>
+      </div>
+      <input type="file" id="pdfFileInput" accept=".pdf" hidden>
+    </div>
+
+    <div class="format-section">
+      <div class="format-row">
+        <div class="format-group">
+          <label>输出格式</label>
+          <select id="pdfOutputFormat" class="select" disabled>
+            <option value="docx" selected>Word (.docx)</option>
+            <option value="xlsx">Excel (.xlsx)</option>
+          </select>
+        </div>
+      </div>
+      <button id="pdfConvertBtn" class="btn btn-primary" disabled>开始转换</button>
+    </div>
+  </div>
+
+  <!-- 素描模式 -->
+  <div id="sketch-mode" class="mode-panel">
+    <div class="drop-zone" id="sketchDropZone">
+      <div class="drop-content">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <p>拖拽照片到此处，或 <span class="link">点击选择</span></p>
+        <p class="hint">支持 JPG / PNG / BMP / WebP，自动转为铅笔素描风格</p>
+      </div>
+      <input type="file" id="sketchFileInput" accept=".jpg,.jpeg,.png,.bmp,.webp" hidden>
+    </div>
+
+    <div class="format-section">
+      <div class="precision-row">
+        <label>线条粗细 <span id="sigmaVal">3.0</span></label>
+        <input type="range" id="sigmaSlider" min="0.5" max="10" value="3" step="0.5">
+        <span class="range-labels"><span>细线锐利</span><span>粗线柔和</span></span>
+      </div>
+      <button id="sketchConvertBtn" class="btn btn-primary" disabled>生成素描</button>
+    </div>
+  </div>
+
+  <!-- 状态区 -->
+  <div id="status" class="status-panel" hidden>
+    <div class="spinner"></div>
+    <p id="statusText">正在处理...</p>
+  </div>
+
+  <!-- 结果区 -->
+  <div id="result" class="result-panel" hidden>
+    <div class="result-icon" id="resultIcon">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2">
+        <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+        <polyline points="22 4 12 14.01 9 11.01"/>
+      </svg>
+    </div>
+    <p id="resultText">转换成功！</p>
+    <a id="downloadLink" class="btn btn-success" download>下载文件</a>
+    <button id="resetBtn" class="btn btn-secondary">继续转换</button>
+  </div>
+</main>
+
+<footer class="footer">
+  <p>FlowConvert &copy; 2026 · 基于 Go + OpenCode 构建 · 反馈：647133036@qq.com · <a href="https://beian.miit.gov.cn/" target="_blank">桂ICP备XXXXXX号-X</a> · <a href="https://beian.mps.gov.cn/#/query/webSearch?code=桂公网安备XXXXXXXXXXXXXXX号" target="_blank">桂公网安备XXXXXXXXXXXXXXX号</a></p>
+</footer>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>

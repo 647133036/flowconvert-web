@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>在线翻译 - FlowConvert</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+  .translate-card h1 {
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+</style>
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="/" class="nav-logo">FlowConvert</a>
+    <div class="nav-links">
+      <a href="/">格式转换</a>
+      <a href="/idphoto">证件照</a>
+      <a href="/translate" class="active">翻译</a>
+      <a href="/video">视频生成</a>
+      <a href="/image">图像生成</a>
+      <a href="/about">常见问题</a>
+      <a href="/donate">赞赏支持</a>
+    </div>
+  </div>
+</nav>
+
+<main class="container page-content translate-page">
+  <div class="translate-card">
+    <h1>🌐 在线翻译</h1>
+    <div class="divider"></div>
+    <p class="translate-intro">支持中、英、日、韩、法、德、西、葡等 40+ 语言互译</p>
+
+    <div class="translate-controls">
+      <div class="lang-row">
+        <select id="sourceLang" class="select lang-select">
+          <option value="auto">🌍 自动检测</option>
+          <option value="zh">中文</option>
+          <option value="en" selected>英语</option>
+          <option value="ja">日语</option>
+          <option value="ko">韩语</option>
+          <option value="fr">法语</option>
+          <option value="de">德语</option>
+          <option value="es">西班牙语</option>
+          <option value="pt">葡萄牙语</option>
+          <option value="ru">俄语</option>
+          <option value="ar">阿拉伯语</option>
+          <option value="th">泰语</option>
+          <option value="vi">越南语</option>
+          <option value="it">意大利语</option>
+          <option value="nl">荷兰语</option>
+          <option value="pl">波兰语</option>
+          <option value="tr">土耳其语</option>
+        </select>
+        <button id="swapLang" class="btn-swap" title="互换语言">⇄</button>
+        <select id="targetLang" class="select lang-select">
+          <option value="zh" selected>中文</option>
+          <option value="en">英语</option>
+          <option value="ja">日语</option>
+          <option value="ko">韩语</option>
+          <option value="fr">法语</option>
+          <option value="de">德语</option>
+          <option value="es">西班牙语</option>
+          <option value="pt">葡萄牙语</option>
+          <option value="ru">俄语</option>
+          <option value="ar">阿拉伯语</option>
+          <option value="th">泰语</option>
+          <option value="vi">越南语</option>
+          <option value="it">意大利语</option>
+          <option value="nl">荷兰语</option>
+          <option value="pl">波兰语</option>
+          <option value="tr">土耳其语</option>
+        </select>
+      </div>
+
+      <div class="text-area-row">
+        <div class="text-area-box">
+          <textarea id="sourceText" class="translate-textarea" placeholder="输入要翻译的文字..." rows="6"></textarea>
+          <div class="textarea-footer">
+            <span id="sourceCharCount">0</span>
+            <button id="clearBtn" class="btn-clear">清空</button>
+          </div>
+        </div>
+        <div class="text-area-box">
+          <textarea id="resultText" class="translate-textarea result-area" placeholder="翻译结果..." rows="6" readonly></textarea>
+          <div class="textarea-footer">
+            <span id="detectedLang"></span>
+            <button id="copyBtn" class="btn-clear">复制</button>
+          </div>
+        </div>
+      </div>
+
+      <button id="translateBtn" class="btn btn-primary translate-btn">翻 译</button>
+      <div id="translateStatus" class="translate-status"></div>
+    </div>
+
+    <!-- ═══ 文件翻译 ═══ -->
+    <div class="file-translate-section">
+      <p style="text-align:center;color:var(--text-muted,#999);font-size:0.9rem;margin-bottom:0.75rem;">— 或翻译文档 —</p>
+
+      <!-- 支持格式 -->
+      <div class="file-formats">
+        <span class="format-badge"><span class="icon">📄</span> TXT</span>
+        <span class="format-badge"><span class="icon">📕</span> PDF</span>
+        <span class="format-badge"><span class="icon">📘</span> DOCX</span>
+        <span class="format-badge"><span class="icon">📊</span> XLSX</span>
+        <span class="format-badge"><span class="icon">📽️</span> PPTX</span>
+        <span class="format-badge"><span class="icon">🌐</span> HTML</span>
+      </div>
+
+      <!-- 拖拽上传区 -->
+      <div id="fileDropZone" class="file-drop-zone">
+        <div class="drop-icon">📂</div>
+        <div class="drop-text">点击选择文件 或 拖拽到此处</div>
+        <div class="drop-hint">支持 TXT · PDF · DOCX · XLSX · PPTX · HTML</div>
+        <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.html,.htm,.odt,.ods,.odp">
+      </div>
+
+      <!-- 已选文件信息 -->
+      <div id="fileInfo" class="file-info">
+        <span class="file-icon">📄</span>
+        <div class="file-details">
+          <div class="file-name" id="fileName">document.pdf</div>
+          <div class="file-size" id="fileSize">1.2 MB</div>
+        </div>
+        <span class="file-remove" id="fileRemove" title="移除文件">✕</span>
+      </div>
+
+      <!-- 进度 -->
+      <div id="fileProgress" class="file-translate-progress">
+        <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
+        <div class="progress-text" id="progressText">正在翻译...</div>
+      </div>
+
+      <!-- 结果 -->
+      <div id="fileResult" class="file-result">
+        <div class="result-msg">✅ 翻译完成</div>
+        <a id="downloadLink" class="btn btn-primary btn-download" href="#" download>⬇ 下载翻译结果</a>
+      </div>
+
+      <!-- 错误 -->
+      <div id="fileError" class="file-error"></div>
+
+      <!-- 文件翻译按钮 -->
+      <button id="translateFileBtn" class="btn btn-primary translate-btn" style="margin-top:1rem">翻译文件</button>
+    </div>
+  </div>
+</main>
+
+<footer class="footer">
+  <p>FlowConvert &copy; 2026 · 翻译引擎: MyMemory (免费公共API) · 反馈：647133036@qq.com · <a href="https://beian.miit.gov.cn/" target="_blank">桂ICP备XXXXXX号-X</a> · <a href="https://beian.mps.gov.cn/#/query/webSearch?code=桂公网安备XXXXXXXXXXXXXXX号" target="_blank">桂公网安备XXXXXXXXXXXXXXX号</a></p>
+</footer>
+
+<script>
+(function() {
+  // ── 文本翻译 ──
+  const sourceText = document.getElementById('sourceText');
+  const resultText = document.getElementById('resultText');
+  const sourceLang = document.getElementById('sourceLang');
+  const targetLang = document.getElementById('targetLang');
+  const swapBtn = document.getElementById('swapLang');
+  const translateBtn = document.getElementById('translateBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const copyBtn = document.getElementById('copyBtn');
+  const sourceCharCount = document.getElementById('sourceCharCount');
+  const detectedLang = document.getElementById('detectedLang');
+  const statusEl = document.getElementById('translateStatus');
+
+  sourceText.addEventListener('input', function() {
+    sourceCharCount.textContent = this.value.length;
+  });
+
+  clearBtn.addEventListener('click', function() {
+    sourceText.value = '';
+    resultText.value = '';
+    detectedLang.textContent = '';
+    sourceCharCount.textContent = '0';
+    statusEl.textContent = '';
+  });
+
+  copyBtn.addEventListener('click', function() {
+    if (!resultText.value) return;
+    navigator.clipboard.writeText(resultText.value).then(function() {
+      const orig = copyBtn.textContent;
+      copyBtn.textContent = '✓ 已复制';
+      setTimeout(function() { copyBtn.textContent = orig; }, 1500);
+    });
+  });
+
+  swapBtn.addEventListener('click', function() {
+    if (sourceLang.value === 'auto') return;
+    const tmp = sourceLang.value;
+    sourceLang.value = targetLang.value;
+    targetLang.value = tmp;
+  });
+
+  sourceText.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      doTranslate();
+    }
+  });
+
+  translateBtn.addEventListener('click', doTranslate);
+
+  async function doTranslate() {
+    const text = sourceText.value.trim();
+    if (!text) {
+      statusEl.textContent = '⚠️ 请输入要翻译的文字';
+      statusEl.className = 'translate-status error';
+      return;
+    }
+    if (text.length > 5000) {
+      statusEl.textContent = '⚠️ 文字过长（最多5000字符）';
+      statusEl.className = 'translate-status error';
+      return;
+    }
+
+    translateBtn.disabled = true;
+    translateBtn.textContent = '翻译中...';
+    statusEl.textContent = '';
+    statusEl.className = 'translate-status';
+
+    try {
+      const resp = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: text,
+          source: sourceLang.value,
+          target: targetLang.value
+        })
+      });
+
+      const data = await resp.json();
+
+      if (data.success) {
+        resultText.value = data.translated_text;
+        if (data.detected_language) {
+          const langNames = {
+            'zh': '中文', 'en': '英语', 'ja': '日语', 'ko': '韩语',
+            'fr': '法语', 'de': '德语', 'es': '西班牙语', 'pt': '葡萄牙语',
+            'ru': '俄语', 'ar': '阿拉伯语', 'th': '泰语', 'vi': '越南语',
+            'it': '意大利语', 'nl': '荷兰语', 'pl': '波兰语', 'tr': '土耳其语'
+          };
+          detectedLang.textContent = '检测到: ' + (langNames[data.detected_language] || data.detected_language);
+        }
+        statusEl.textContent = '✅ 翻译完成';
+        statusEl.className = 'translate-status success';
+      } else {
+        statusEl.textContent = '❌ ' + (data.error || '翻译失败');
+        statusEl.className = 'translate-status error';
+      }
+    } catch (err) {
+      statusEl.textContent = '❌ 网络错误: ' + err.message;
+      statusEl.className = 'translate-status error';
+    } finally {
+      translateBtn.disabled = false;
+      translateBtn.textContent = '翻 译';
+    }
+  }
+
+  // ── 文件翻译 ──
+  const dropZone = document.getElementById('fileDropZone');
+  const fileInput = document.getElementById('fileInput');
+  const fileInfo = document.getElementById('fileInfo');
+  const fileName = document.getElementById('fileName');
+  const fileSize = document.getElementById('fileSize');
+  const fileRemove = document.getElementById('fileRemove');
+  const translateFileBtn = document.getElementById('translateFileBtn');
+  const fileProgress = document.getElementById('fileProgress');
+  const progressFill = document.getElementById('progressFill');
+  const progressText = document.getElementById('progressText');
+  const fileResult = document.getElementById('fileResult');
+  const downloadLink = document.getElementById('downloadLink');
+  const fileError = document.getElementById('fileError');
+
+  let selectedFile = null;
+
+  // 格式图标映射
+  const formatIcons = {
+    'txt': '📄', 'pdf': '📕', 'doc': '📘', 'docx': '📘',
+    'xls': '📊', 'xlsx': '📊', 'ppt': '📽️', 'pptx': '📽️',
+    'html': '🌐', 'htm': '🌐', 'odt': '📄', 'ods': '📊', 'odp': '📽️'
+  };
+
+  function getFormatIcon(name) {
+    const ext = name.split('.').pop().toLowerCase();
+    return formatIcons[ext] || '📄';
+  }
+
+  function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function showFile(file) {
+    selectedFile = file;
+    fileInfo.className = 'file-info visible';
+    fileName.textContent = file.name;
+    fileSize.textContent = formatFileSize(file.size);
+    fileInfo.querySelector('.file-icon').textContent = getFormatIcon(file.name);
+    dropZone.className = 'file-drop-zone has-file';
+    dropZone.querySelector('.drop-text').textContent = '已选择文件，点击更换';
+    dropZone.querySelector('.drop-hint').textContent = file.name;
+    fileResult.className = 'file-result';
+    fileError.className = 'file-error';
+    fileProgress.className = 'file-translate-progress';
+  }
+
+  function clearFile() {
+    selectedFile = null;
+    fileInput.value = '';
+    fileInfo.className = 'file-info';
+    dropZone.className = 'file-drop-zone';
+    dropZone.querySelector('.drop-text').textContent = '点击选择文件 或 拖拽到此处';
+    dropZone.querySelector('.drop-hint').textContent = '支持 TXT · PDF · DOCX · XLSX · PPTX · HTML';
+    fileResult.className = 'file-result';
+    fileError.className = 'file-error';
+    fileProgress.className = 'file-translate-progress';
+  }
+
+  dropZone.addEventListener('click', function() { fileInput.click(); });
+
+  fileInput.addEventListener('change', function(e) {
+    if (e.target.files && e.target.files[0]) showFile(e.target.files[0]);
+  });
+
+  fileRemove.addEventListener('click', function(e) {
+    e.stopPropagation();
+    clearFile();
+  });
+
+  dropZone.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    this.classList.add('dragover');
+  });
+  dropZone.addEventListener('dragleave', function(e) {
+    e.preventDefault();
+    this.classList.remove('dragover');
+  });
+  dropZone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    this.classList.remove('dragover');
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) showFile(e.dataTransfer.files[0]);
+  });
+
+  translateFileBtn.addEventListener('click', async function() {
+    if (!selectedFile) {
+      fileError.textContent = '⚠️ 请先选择要翻译的文件';
+      fileError.className = 'file-error visible';
+      return;
+    }
+
+    fileError.className = 'file-error';
+    fileResult.className = 'file-result';
+
+    fileProgress.className = 'file-translate-progress visible';
+    progressFill.style.width = '10%';
+    progressText.textContent = '正在上传并翻译...';
+    translateFileBtn.disabled = true;
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    formData.append('source', sourceLang.value);
+    formData.append('target', targetLang.value);
+
+    try {
+      progressFill.style.width = '30%';
+      progressText.textContent = '正在翻译文档...';
+
+      const resp = await fetch('/api/translate/file', {
+        method: 'POST',
+        body: formData
+      });
+
+      progressFill.style.width = '70%';
+
+      const data = await resp.json();
+
+      if (data.success) {
+        progressFill.style.width = '100%';
+        progressText.textContent = '✅ 翻译完成';
+
+        fileResult.className = 'file-result visible';
+        fileResult.querySelector('.result-msg').textContent =
+          '✅ ' + data.original_name + ' → ' + data.output_name;
+        downloadLink.href = data.download_url;
+        downloadLink.download = data.output_name;
+
+        setTimeout(function() {
+          fileProgress.className = 'file-translate-progress';
+        }, 1500);
+      } else {
+        fileError.textContent = '❌ ' + (data.error || '翻译失败');
+        fileError.className = 'file-error visible';
+        fileProgress.className = 'file-translate-progress';
+      }
+    } catch (err) {
+      fileError.textContent = '❌ 网络错误: ' + err.message;
+      fileError.className = 'file-error visible';
+      fileProgress.className = 'file-translate-progress';
+    } finally {
+      translateFileBtn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>

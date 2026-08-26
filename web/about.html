@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>常见问题 - FlowConvert</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="/" class="nav-logo">FlowConvert</a>
+    <div class="nav-links">
+      <a href="/">格式转换</a>
+      <a href="/idphoto">证件照</a>
+      <a href="/translate">翻译</a>
+      <a href="/video">视频生成</a>
+      <a href="/image">图像生成</a>
+      <a href="/about" class="active">常见问题</a>
+      <a href="/donate">赞赏支持</a>
+    </div>
+  </div>
+</nav>
+
+<main class="container page-content">
+  <h1>常见问题</h1>
+
+  <section class="faq-section">
+    <h2>关于格式转换</h2>
+
+    <details class="faq-item" open>
+      <summary>支持哪些图片格式转矢量？</summary>
+      <p>支持 JPG、PNG、BMP、TIFF、WebP、GIF 等常见栅格格式。输出矢量格式包括 SVG、AI (Adobe Illustrator)、DXF (CAD)、EPS、SK (Sketch)、FIG (Figma)。</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>什么是栅格图和矢量图的区别？</summary>
+      <p>栅格图（如 JPG、PNG）由像素构成，放大后会模糊。矢量图（如 SVG、AI）由数学曲线构成，无限放大不失真，适用于印刷、Logo、CAD 等场景。FlowConvert 通过智能描摹算法将像素图转为矢量路径。</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>PDF 可以转哪些 Office 格式？</summary>
+      <p>支持将 PDF 转为 Word (.docx) 和 Excel (.xlsx) 格式，方便进一步编辑。转换通过 LibreOffice 引擎完成，尽量保留原始排版。</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>转换后的文件质量如何？</summary>
+      <p>图片转矢量采用 VTracer（彩色/复杂图）和 Potrace（黑白图）双引擎，自动选择最优方案。矢量输出保留颜色和细节。PDF 转 Office 保留文本、表格和基本排版，复杂布局可能有偏差。</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>为什么我转出的 AI/EPS 文件打不开？</summary>
+      <p>AI 和 EPS 由 Inkscape 生成，遵循标准格式规范。如果打不开，建议先用 SVG 格式导出，再将 SVG 导入目标软件。部分老旧软件可能不支持新版 AI 格式。</p>
+    </details>
+  </section>
+
+  <section class="faq-section">
+    <h2>使用与安全</h2>
+
+    <details class="faq-item">
+      <summary>文件会保存多久？</summary>
+      <p>转换后的文件在服务器上保留 1 小时后自动删除。我们建议您及时下载。上传的原文件在转换完成后会立即删除，不留存。</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>文件安全吗？</summary>
+      <p>完全安全。所有文件均在服务器端即时处理，转换完成后立即清理。我们不存储、不分析、不分享您的文件内容。上传通道经过 SSRF 防护和 MIME 校验，防止恶意利用。</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>有文件大小限制吗？</summary>
+      <p>图片上传限制为 50MB，URL 下载限制为 20MB。PDF 转 Office 同样适用 50MB 限制。如果文件较大，处理时间会相应延长。</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>支持批量转换吗？</summary>
+      <p>当前版本仅支持单文件转换。批量转换功能正在开发中，敬请期待。</p>
+    </details>
+  </section>
+
+  <section class="faq-section">
+    <h2>技术支持</h2>
+    <p>FlowConvert 基于 Go 构建，使用 VTracer / Potrace / Inkscape / LibreOffice 等开源工具。如果您遇到问题或有建议，欢迎通过 GitHub Issues 或邮箱 647133036@qq.com 反馈。</p>
+    <p><strong>域名：</strong>flowconvert.cn</p>
+  </section>
+</main>
+
+<footer class="footer">
+  <p>FlowConvert &copy; 2026 · 基于 Go + OpenCode 构建 · <a href="https://beian.miit.gov.cn/" target="_blank">桂ICP备XXXXXX号-X</a> · <a href="https://beian.mps.gov.cn/#/query/webSearch?code=桂公网安备XXXXXXXXXXXXXXX号" target="_blank">桂公网安备XXXXXXXXXXXXXXX号</a></p>
+</footer>
+</body>
+</html>
