@@ -2,7 +2,7 @@
 
 [![Go Version](https://img.shields.io/badge/go-1.25-blue.svg)](https://golang.org/)
 [![License](https://img.shields.io/badge/license-Apache--3.0-green.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.1.0-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/version-v0.1.1-brightgreen.svg)](#)
 
 一个基于 Go 的轻量级文档与媒体转换服务，支持图片转矢量、PDF 转 Office、证件照制作、多语言翻译以及 AI 视频/图像生成。**内置 OCR 引擎，支持扫描版/照片式 PDF 的文字识别。**
 
@@ -123,7 +123,7 @@ docker run -p 8080:8080 \
 ```
 flowconvert/
 ├── main.go                 # 入口与路由注册
-├── middleware.go           # CORS + 限流中间件
+├── middleware.go           # CORS + 限流 + 安全头中间件
 ├── go.mod                  # Go 模块定义
 ├── internal/
 │   ├── config/             # 配置加载
@@ -221,12 +221,15 @@ curl http://localhost:8080/api/convert/video/task/abc123...
 
 ## 安全特性
 
-- **SSRF 防护**：`FetchImage` 通过 DNS 解析校验 + 建连瞬间 IP 白名单，防止访问内网/元数据
-- **上传校验**：文件扩展名与 MIME 双重匹配，拒绝伪装类型
-- **文件大小限制**：默认 50MB，防止 DoS
+- **SSRF 防护**：`FetchImage` 通过 DNS 解析校验 + 建连瞬间 IP 白名单；`DownloadImage/DownloadVideo` 拒绝内网/回环地址
+- **上传校验**：文件扩展名与 MIME 双重匹配，`ParseMultipartForm` 限制请求体大小，拒绝伪装类型
+- **文件大小限制**：上传默认 50MB，下载图片 100MB / 视频 500MB（`io.LimitReader`）
 - **路径穿越防护**：文件名净化 + ServeMux 路径规范化
-- **限流中间件**：每 IP 每分钟 100 请求
-- **安全响应头**：`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`
+- **限流中间件**：每 IP 滑动窗口，bucket 上限 10000 自动清理，XFF 链仅信任有效公网 IP
+- **并发控制**：视频生成任务最大 6 个并发，超出返回 503
+- **错误信息脱敏**：内部错误仅记录 stderr，客户端收到通用提示
+- **输入校验**：输出格式白名单、提示词 2000 字符上限、数值参数范围校验、JSON body 大小限制
+- **安全响应头**：`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`X-XSS-Protection: 1; mode=block`、`Content-Security-Policy`
 
 ## 开发
 
@@ -254,6 +257,19 @@ LOG_LEVEL=debug go run .
 ```
 
 ## 版本历史
+
+- **v0.1.1** (2026-08) 安全加固与并发控制
+  - 限流器：bucket 上限 10000，自动清理过期条目，XFF 信任逻辑修复
+  - 视频生成：最大 6 个并发任务（信号量控制）
+  - 错误信息脱敏：内部错误仅记录 stderr，不返回客户端
+  - SSRF 防护：DownloadImage/DownloadVideo 拒绝内网/回环地址
+  - 输出格式白名单：矢量/PDF 转换参数按白名单校验
+  - 提示词长度上限：所有 handler 限制 2000 字符
+  - 素描 sigma 范围：限定 0.5–10
+  - 翻译请求体：限制 1MB
+  - 安全响应头：新增 Content-Security-Policy
+  - 前端 XSS 修复：file.name 通过 textContent 插入
+  - 前端链接安全：外部链接添加 rel=noopener
 
 - **v0.1.0** (2026-08) 初始版本
   - 基础格式转换（图片→矢量、PDF→Office）
