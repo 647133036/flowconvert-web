@@ -46,6 +46,7 @@ func (h *TranslateH) HandleTranslate(w http.ResponseWriter, r *http.Request) {
 		Source string `json:"source"`
 		Target string `json:"target"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeJSON(w, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "请求参数错误"})
 		return
@@ -68,7 +69,8 @@ func (h *TranslateH) HandleTranslate(w http.ResponseWriter, r *http.Request) {
 
 	res, err := service.TranslateText(req.Text, req.Source, req.Target)
 	if err != nil {
-		h.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"success": false, "error": err.Error()})
+		fmt.Fprintf(os.Stderr, "[Translate] error: %v\n", err)
+		h.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"success": false, "error": "翻译失败，请稍后重试"})
 		return
 	}
 	h.writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -141,7 +143,8 @@ func (h *TranslateH) HandleTranslateFile(w http.ResponseWriter, r *http.Request)
 
 	output, err := service.TranslateFile(outDir, tmpPath, source, target)
 	if err != nil {
-		h.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"success": false, "error": err.Error()})
+		fmt.Fprintf(os.Stderr, "[TranslateFile] error: %v\n", err)
+		h.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"success": false, "error": "文件翻译失败，请稍后重试"})
 		return
 	}
 	outExt := strings.TrimPrefix(filepath.Ext(output), ".")

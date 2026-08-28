@@ -32,6 +32,11 @@ func (h *ImageGenH) writeErr(w http.ResponseWriter, status int, msg string) {
 	h.writeJSON(w, status, map[string]interface{}{"success": false, "error": msg})
 }
 
+func (h *ImageGenH) safeErr(w http.ResponseWriter, err error) {
+	fmt.Fprintf(os.Stderr, "[ImageGen] error: %v\n", err)
+	h.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"success": false, "error": "生成失败，请稍后重试"})
+}
+
 // HandleTextImage: POST /api/convert/image/text
 func (h *ImageGenH) HandleTextImage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -42,6 +47,10 @@ func (h *ImageGenH) HandleTextImage(w http.ResponseWriter, r *http.Request) {
 	prompt := strings.TrimSpace(r.FormValue("prompt"))
 	if prompt == "" {
 		h.writeErr(w, http.StatusBadRequest, "请输入提示词")
+		return
+	}
+	if len(prompt) > maxPromptLen {
+		h.writeErr(w, http.StatusBadRequest, fmt.Sprintf("提示词长度不能超过%d个字符", maxPromptLen))
 		return
 	}
 
@@ -68,7 +77,7 @@ func (h *ImageGenH) HandleTextImage(w http.ResponseWriter, r *http.Request) {
 	if dest == "" || err != nil {
 		dest, err = service.MakeImage(tmp, prompt, width, height)
 		if err != nil {
-			h.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+			h.safeErr(w, err)
 			return
 		}
 	}
@@ -98,6 +107,10 @@ func (h *ImageGenH) HandleEditImage(w http.ResponseWriter, r *http.Request) {
 	prompt := strings.TrimSpace(r.FormValue("prompt"))
 	if prompt == "" {
 		h.writeErr(w, http.StatusBadRequest, "请输入编辑描述")
+		return
+	}
+	if len(prompt) > maxPromptLen {
+		h.writeErr(w, http.StatusBadRequest, fmt.Sprintf("提示词长度不能超过%d个字符", maxPromptLen))
 		return
 	}
 
@@ -155,7 +168,7 @@ func (h *ImageGenH) HandleEditImage(w http.ResponseWriter, r *http.Request) {
 	if dest == "" || err != nil {
 		dest, err = service.MakeEditedImage(tmp, srcPath, prompt, width, height)
 		if err != nil {
-			h.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+			h.safeErr(w, err)
 			return
 		}
 	}
@@ -183,6 +196,10 @@ func (h *ImageGenH) HandleComposeImage(w http.ResponseWriter, r *http.Request) {
 	prompt := strings.TrimSpace(r.FormValue("prompt"))
 	if prompt == "" {
 		h.writeErr(w, http.StatusBadRequest, "请输入提示词")
+		return
+	}
+	if len(prompt) > maxPromptLen {
+		h.writeErr(w, http.StatusBadRequest, fmt.Sprintf("提示词长度不能超过%d个字符", maxPromptLen))
 		return
 	}
 
@@ -241,7 +258,7 @@ func (h *ImageGenH) HandleComposeImage(w http.ResponseWriter, r *http.Request) {
 	if dest == "" || err != nil {
 		dest, err = service.MakeComposeImage(tmp, prompt, refPaths, width, height)
 		if err != nil {
-			h.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+			h.safeErr(w, err)
 			return
 		}
 	}

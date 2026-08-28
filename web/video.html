@@ -684,10 +684,16 @@ function handleLastFrame(file) {
 function updatePreview(zone, file, label) {
   const reader = new FileReader();
   reader.onload = e => {
-    zone.querySelector('.drop-content').innerHTML = `
-      <img src="${e.target.result}" style="max-width:100%;max-height:100px;border-radius:4px;">
-      <p style="color:#22c55e;margin-top:8px;">${file.name}</p>
-    `;
+    const container = zone.querySelector('.drop-content');
+    container.innerHTML = `<img src="${e.target.result}" style="max-width:100%;max-height:100px;border-radius:4px;">`;
+    let p = container.querySelector('p');
+    if (!p) {
+      p = document.createElement('p');
+      p.style.color = '#22c55e';
+      p.style.marginTop = '8px';
+      container.appendChild(p);
+    }
+    p.textContent = file.name;
   };
   reader.readAsDataURL(file);
 }

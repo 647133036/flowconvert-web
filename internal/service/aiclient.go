@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -149,6 +150,9 @@ func (c *AIClient) DownloadImage(imgURL, b64, destPath string) error {
 	}
 	if imgURL == "" {
 		return fmt.Errorf("无图片URL或base64数据")
+	}
+	if err := validateDownloadURL(imgURL); err != nil {
+		return err
 	}
 	resp, err := c.HTTP.Get(imgURL)
 	if err != nil {
@@ -445,6 +449,9 @@ func (c *AIClient) generateVideoSegment(segPath string, params VideoTaskParams, 
 
 // DownloadVideo downloads a remote video URL to destPath.
 func (c *AIClient) DownloadVideo(videoURL, destPath string) error {
+	if err := validateDownloadURL(videoURL); err != nil {
+		return err
+	}
 	resp, err := c.HTTP.Get(videoURL)
 	if err != nil {
 		return fmt.Errorf("下载视频失败: %v", err)
@@ -463,6 +470,29 @@ func (c *AIClient) DownloadVideo(videoURL, destPath string) error {
 }
 
 // ── HTTP helper ──
+
+// validateDownloadURL checks that a URL is safe to download from.
+// It rejects private IPs, loopback addresses, and empty/malformed URLs.
+// The URL must use http or https scheme.
+func validateDownloadURL(raw string) error {
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil {
+		return fmt.Errorf("无效URL: %v", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("仅支持 http/https 协议")
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return fmt.Errorf("URL 缺少 host")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
+			return fmt.Errorf("禁止下载内网/回环地址资源")
+		}
+	}
+	return nil
+}
 
 func (c *AIClient) postJSON(fullURL, apiKey string, body interface{}) ([]byte, error) {
 	jsonBody, err := json.Marshal(body)

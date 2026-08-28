@@ -32,6 +32,14 @@ func (c *ConvertH) writeErr(w http.ResponseWriter, status int, msg string) {
 	c.writeJSON(w, status, map[string]interface{}{"success": false, "error": msg})
 }
 
+// safeErr returns a user-friendly generic message for 422 responses,
+// logging the full error to stderr. Internal paths/command output
+// should never reach the client.
+func (c *ConvertH) safeErr(w http.ResponseWriter, err error) {
+	fmt.Fprintf(os.Stderr, "[Convert] error: %v\n", err)
+	c.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"success": false, "error": "处理失败，请稍后重试"})
+}
+
 // saveUpload saves an uploaded file into a tmp dir, validating size and type
 // based on the expected format list.
 func (c *ConvertH) saveUpload(r *http.Request, field string, allowExts []string) (string, string, error) {
@@ -145,11 +153,16 @@ func (c *ConvertH) HandleUploadVectorize(w http.ResponseWriter, r *http.Request)
 	output := r.FormValue("output")
 	if output == "" {
 		output = "svg"
+	} else if v := validOutput(output, "vector"); v == "" {
+		c.writeErr(w, http.StatusBadRequest, "不支持的输出格式")
+		return
+	} else {
+		output = v
 	}
 
 	dest, err := service.Vectorize(tmp, src, output, params)
 	if err != nil {
-		c.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		c.safeErr(w, err)
 		return
 	}
 	dl, err := c.registerOutput(dest, "converted."+output)
@@ -185,6 +198,11 @@ func (c *ConvertH) HandleURLVectorize(w http.ResponseWriter, r *http.Request) {
 	output := r.URL.Query().Get("output")
 	if output == "" {
 		output = "svg"
+	} else if v := validOutput(output, "vector"); v == "" {
+		c.writeErr(w, http.StatusBadRequest, "不支持的输出格式")
+		return
+	} else {
+		output = v
 	}
 	params := service.VecParams{
 		Mode:            r.URL.Query().Get("mode"),
@@ -209,7 +227,7 @@ func (c *ConvertH) HandleURLVectorize(w http.ResponseWriter, r *http.Request) {
 
 	dest, err := service.Vectorize(tmp, src, output, params)
 	if err != nil {
-		c.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		c.safeErr(w, err)
 		return
 	}
 	dl, err := c.registerOutput(dest, "converted."+output)
@@ -260,10 +278,15 @@ func (c *ConvertH) HandlePdfToOffice(w http.ResponseWriter, r *http.Request) {
 	output := r.FormValue("output")
 	if output == "" {
 		output = "docx"
+	} else if v := validOutput(output, "pdf"); v == "" {
+		c.writeErr(w, http.StatusBadRequest, "不支持的输出格式")
+		return
+	} else {
+		output = v
 	}
 	dest, err := service.PdfToOffice(tmp, src, output)
 	if err != nil {
-		c.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		c.safeErr(w, err)
 		return
 	}
 	dl, err := c.registerOutput(dest, "converted."+output)
@@ -301,9 +324,12 @@ func (c *ConvertH) HandleSketch(w http.ResponseWriter, r *http.Request) {
 	defer c.cleanupTmp(tmp)
 
 	sigma, _ := strconv.ParseFloat(r.FormValue("sigma"), 64)
+	if sigma <= 0 || sigma > 10 {
+		sigma = 3.0
+	}
 	dest, err := service.MakeSketch(tmp, src, sigma)
 	if err != nil {
-		c.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		c.safeErr(w, err)
 		return
 	}
 	dl, err := c.registerOutput(dest, "sketch.png")
@@ -345,7 +371,7 @@ func (c *ConvertH) HandleIdPhoto(w http.ResponseWriter, r *http.Request) {
 
 	dest, err := service.MakeIdPhoto(tmp, src, size, bg)
 	if err != nil {
-		c.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		c.safeErr(w, err)
 		return
 	}
 	defer os.Remove(dest)
@@ -367,9 +393,35 @@ func (c *ConvertH) HandleFormats(w http.ResponseWriter, r *http.Request) {
 	c.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":        true,
 		"image_input":    []string{"jpg", "jpeg", "png", "bmp", "tiff", "webp", "gif"},
-		"vector_output": []string{"svg", "ai", "dxf", "eps", "fig", "sk", "pdf"},
+		"vector_output":  []string{"svg", "ai", "dxf", "eps", "fig", "sk", "pdf"},
 		"pdf_output":     []string{"docx", "xlsx"},
 		"max_upload_mb":  50,
 		"max_url_mb":     20,
 	})
+}
+
+var allowedVectorOutputs = map[string]bool{"svg": true, "ai": true, "dxf": true, "eps": true, "fig": true, "sk": true, "pdf": true}
+var allowedPDFOutputs = map[string]bool{"docx": true, "xlsx": true}
+
+func validOutput(format, kind string) string {
+	switch kind {
+	case "vector":
+		if allowedVectorOutputs[format] {
+			return format
+		}
+	case "pdf":
+		if allowedPDFOutputs[format] {
+			return format
+		}
+	}
+	return ""
+}
+
+const maxPromptLen = 2000
+
+func validPrompt(p string) (string, error) {
+	if len(p) > maxPromptLen {
+		return "", fmt.Errorf("提示词长度不能超过%d个字符", maxPromptLen)
+	}
+	return p, nil
 }

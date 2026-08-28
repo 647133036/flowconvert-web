@@ -14,6 +14,7 @@ func CORS(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -28,9 +29,11 @@ func CORS(next http.Handler) http.Handler {
 }
 
 type ipBucket struct {
-	count    int
+	count     int
 	windowEnd time.Time
 }
+
+const maxBuckets = 10000
 
 // RateLimit implements a per-IP sliding-window rate limiter.
 func RateLimit(next http.Handler, maxRequests int) http.Handler {
@@ -65,6 +68,18 @@ func RateLimit(next http.Handler, maxRequests int) http.Handler {
 		now := time.Now()
 		b, ok := buckets[ip]
 		if !ok || now.After(b.windowEnd) {
+			if len(buckets) >= maxBuckets {
+				for k, v := range buckets {
+					if now.After(v.windowEnd) {
+						delete(buckets, k)
+					}
+				}
+				if len(buckets) >= maxBuckets {
+					mu.Unlock()
+					http.Error(w, "服务器繁忙，请稍后重试", http.StatusServiceUnavailable)
+					return
+				}
+			}
 			b = &ipBucket{count: 0, windowEnd: now.Add(window)}
 			buckets[ip] = b
 		}
@@ -80,25 +95,34 @@ func RateLimit(next http.Handler, maxRequests int) http.Handler {
 	})
 }
 
-// clientIP resolves the client identity for rate limiting. Forwarded headers
-// are honored only when the peer is a loopback/private address (i.e. the
-// request came through our own reverse proxy); direct public connections use
-// RemoteAddr so attackers cannot rotate spoofed X-Forwarded-For values to
-// bypass the rate limiter.
+// clientIP resolves the client identity for rate limiting.
+//
+// When the request arrives via a loopback peer (reverse proxy on the
+// same host), the X-Forwarded-For chain is inspected. We take the
+// LEFTMOST (original client) entry, but only if it is a valid public IP
+// — private/loopback addresses in XFF are ignored to prevent spoofing.
+// Direct connections use RemoteAddr.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
 	}
-	if peer := net.ParseIP(host); peer != nil && (peer.IsLoopback() || peer.IsPrivate()) {
-		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			parts := strings.SplitN(fwd, ",", 2)
-			if v := strings.TrimSpace(parts[0]); v != "" {
-				return v
+	peer := net.ParseIP(host)
+	if peer == nil || !(peer.IsLoopback() || peer.IsPrivate()) {
+		return host
+	}
+	// Behind a proxy; try X-Forwarded-For then X-Real-IP.
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		for _, part := range strings.Split(fwd, ",") {
+			ip := net.ParseIP(strings.TrimSpace(part))
+			if ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsUnspecified() {
+				return ip.String()
 			}
 		}
-		if real := r.Header.Get("X-Real-IP"); real != "" {
-			return strings.TrimSpace(real)
+	}
+	if real := strings.TrimSpace(r.Header.Get("X-Real-IP")); real != "" {
+		if ip := net.ParseIP(real); ip != nil {
+			return ip.String()
 		}
 	}
 	return host

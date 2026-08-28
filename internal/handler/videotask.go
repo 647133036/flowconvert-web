@@ -25,12 +25,16 @@ type VideoJobStore struct {
 	mu   sync.Mutex
 	jobs map[string]*VideoJob
 	ttl  time.Duration
+	sem  chan struct{} // concurrency limiter
 }
+
+const maxVideoConcurrency = 6
 
 func NewVideoJobStore(ttl time.Duration) *VideoJobStore {
 	s := &VideoJobStore{
 		jobs: make(map[string]*VideoJob),
 		ttl:  ttl,
+		sem:  make(chan struct{}, maxVideoConcurrency),
 	}
 	go s.gcLoop()
 	return s
@@ -52,6 +56,28 @@ func (s *VideoJobStore) Get(id string) *VideoJob {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.jobs[id]
+}
+
+// Delete removes a job entry (used when rejecting before goroutine starts).
+func (s *VideoJobStore) Delete(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.jobs, id)
+}
+
+// AcquireSlot blocks until a concurrency slot is available or returns
+// false if the server is at capacity.
+func (s *VideoJobStore) AcquireSlot() bool {
+	select {
+	case s.sem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *VideoJobStore) ReleaseSlot() {
+	<-s.sem
 }
 
 func (s *VideoJobStore) SetComplete(id, url string) {

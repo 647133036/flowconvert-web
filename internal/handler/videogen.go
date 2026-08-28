@@ -34,6 +34,11 @@ func (h *VideoGenH) writeErr(w http.ResponseWriter, status int, msg string) {
 	h.writeJSON(w, status, map[string]interface{}{"success": false, "error": msg})
 }
 
+func (h *VideoGenH) safeJobErr(jobID string, err error) {
+	fmt.Fprintf(os.Stderr, "[VideoJob %s] error: %v\n", jobID, err)
+	h.Jobs.SetError(jobID, "视频生成失败，请稍后重试")
+}
+
 // HandleTextVideo: POST /api/convert/video/text
 // Creates an async job and returns its task_id immediately; progress is
 // polled via GET /api/convert/video/task/{id}.
@@ -70,12 +75,17 @@ func (h *VideoGenH) HandleTextVideo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job := h.Jobs.Create()
+	if !h.Jobs.AcquireSlot() {
+		h.Jobs.Delete(job.ID)
+		h.writeErr(w, http.StatusServiceUnavailable, "服务器繁忙，请稍后重试")
+		return
+	}
 	go func() {
+		defer h.Jobs.ReleaseSlot()
 		defer h.cleanupTmp(tmp)
 
 		var dest string
 		var genErr error
-		fmt.Fprintf(os.Stderr, "[VideoTextJob %s] start: prompt=%s duration=%d ratio=%s\n", job.ID, prompt, duration, aspectRatio)
 		if h.AI != nil {
 			if duration > 12 {
 				dest, genErr = service.MakeLongTextVideoAI(h.AI, tmp, prompt, duration, aspectRatio)
@@ -86,7 +96,7 @@ func (h *VideoGenH) HandleTextVideo(w http.ResponseWriter, r *http.Request) {
 		if dest == "" || genErr != nil {
 			fmt.Fprintf(os.Stderr, "[VideoTextJob %s] AI failed: %v, fallback to python\n", job.ID, genErr)
 			if genErr != nil {
-				h.Jobs.SetNotice(job.ID, "AI 生成失败，已降级为本地合成视频："+genErr.Error())
+				h.Jobs.SetNotice(job.ID, "AI 生成失败，已降级为本地合成视频")
 			} else {
 				h.Jobs.SetNotice(job.ID, "AI 不可用，已降级为本地合成视频")
 			}
@@ -94,7 +104,7 @@ func (h *VideoGenH) HandleTextVideo(w http.ResponseWriter, r *http.Request) {
 		}
 		if genErr != nil {
 			fmt.Fprintf(os.Stderr, "[VideoTextJob %s] FINAL ERROR: %v\n", job.ID, genErr)
-			h.Jobs.SetError(job.ID, genErr.Error())
+			h.Jobs.SetError(job.ID, "视频生成失败，请稍后重试")
 			return
 		}
 		dl, err := h.registerOutput(dest, "video.mp4")
@@ -121,6 +131,10 @@ func (h *VideoGenH) HandleKeyframeVideo(w http.ResponseWriter, r *http.Request) 
 	}
 
 	prompt := strings.TrimSpace(r.FormValue("prompt"))
+	if len(prompt) > maxPromptLen {
+		h.writeErr(w, http.StatusBadRequest, fmt.Sprintf("提示词长度不能超过%d个字符", maxPromptLen))
+		return
+	}
 
 	firstFrame, firstHeader, err := r.FormFile("first_frame")
 	if err != nil {
@@ -197,7 +211,13 @@ func (h *VideoGenH) HandleKeyframeVideo(w http.ResponseWriter, r *http.Request) 
 	}
 
 	job := h.Jobs.Create()
+	if !h.Jobs.AcquireSlot() {
+		h.Jobs.Delete(job.ID)
+		h.writeErr(w, http.StatusServiceUnavailable, "服务器繁忙，请稍后重试")
+		return
+	}
 	go func() {
+		defer h.Jobs.ReleaseSlot()
 		defer h.cleanupTmp(tmp)
 
 		dest := filepath.Join(tmp, "keyframe_video.mp4")
@@ -214,7 +234,7 @@ func (h *VideoGenH) HandleKeyframeVideo(w http.ResponseWriter, r *http.Request) 
 		if destPath == "" || aiErr != nil {
 			fmt.Fprintf(os.Stderr, "[VideoKFJob %s] AI failed: %v, fallback\n", job.ID, aiErr)
 			if aiErr != nil {
-				h.Jobs.SetNotice(job.ID, "AI 生成失败，已降级为本地合成视频："+aiErr.Error())
+				h.Jobs.SetNotice(job.ID, "AI 生成失败，已降级为本地合成视频")
 			} else {
 				h.Jobs.SetNotice(job.ID, "AI 不可用，已降级为本地合成视频")
 			}
@@ -222,7 +242,7 @@ func (h *VideoGenH) HandleKeyframeVideo(w http.ResponseWriter, r *http.Request) 
 		}
 		if aiErr != nil {
 			fmt.Fprintf(os.Stderr, "[VideoKFJob %s] FINAL ERROR: %v\n", job.ID, aiErr)
-			h.Jobs.SetError(job.ID, aiErr.Error())
+			h.Jobs.SetError(job.ID, "视频生成失败，请稍后重试")
 			return
 		}
 		dest = destPath
@@ -253,6 +273,10 @@ func (h *VideoGenH) HandleRefVideo(w http.ResponseWriter, r *http.Request) {
 	prompt := strings.TrimSpace(r.FormValue("prompt"))
 	if prompt == "" {
 		h.writeErr(w, http.StatusBadRequest, "请输入提示词")
+		return
+	}
+	if len(prompt) > maxPromptLen {
+		h.writeErr(w, http.StatusBadRequest, fmt.Sprintf("提示词长度不能超过%d个字符", maxPromptLen))
 		return
 	}
 
@@ -326,7 +350,13 @@ func (h *VideoGenH) HandleRefVideo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job := h.Jobs.Create()
+	if !h.Jobs.AcquireSlot() {
+		h.Jobs.Delete(job.ID)
+		h.writeErr(w, http.StatusServiceUnavailable, "服务器繁忙，请稍后重试")
+		return
+	}
 	go func() {
+		defer h.Jobs.ReleaseSlot()
 		defer h.cleanupTmp(tmp)
 
 		var dest string
@@ -342,7 +372,7 @@ func (h *VideoGenH) HandleRefVideo(w http.ResponseWriter, r *http.Request) {
 		if dest == "" || genErr != nil {
 			fmt.Fprintf(os.Stderr, "[VideoRefJob %s] AI failed: %v, fallback\n", job.ID, genErr)
 			if genErr != nil {
-				h.Jobs.SetNotice(job.ID, "AI 生成失败，已降级为本地合成视频："+genErr.Error())
+				h.Jobs.SetNotice(job.ID, "AI 生成失败，已降级为本地合成视频")
 			} else {
 				h.Jobs.SetNotice(job.ID, "AI 不可用，已降级为本地合成视频")
 			}
@@ -350,7 +380,7 @@ func (h *VideoGenH) HandleRefVideo(w http.ResponseWriter, r *http.Request) {
 		}
 		if genErr != nil {
 			fmt.Fprintf(os.Stderr, "[VideoRefJob %s] FINAL ERROR: %v\n", job.ID, genErr)
-			h.Jobs.SetError(job.ID, genErr.Error())
+			h.Jobs.SetError(job.ID, "视频生成失败，请稍后重试")
 			return
 		}
 		dl, err := h.registerOutput(dest, "video.mp4")
