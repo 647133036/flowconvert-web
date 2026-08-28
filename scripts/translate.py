@@ -7,6 +7,14 @@ import requests
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FlowConvert/1.0"
 
+# ISO 639-2/3 (3-letter) -> ISO 639-1 (2-letter) mapping for detected languages
+_ISO3_TO_2 = {
+    "zho": "zh", "eng": "en", "jpn": "ja", "kor": "ko", "rus": "ru",
+    "ara": "ar", "tha": "th", "vie": "vi", "fra": "fr", "deu": "de",
+    "spa": "es", "por": "pt", "ita": "it", "nld": "nl", "pol": "pl",
+    "tur": "tr",
+}
+
 
 class NoTranslatorError(Exception):
     pass
@@ -37,10 +45,10 @@ def detect_language(text):
     latin = len(re.findall(r"[A-Za-z]", s))
     total = len([c for c in s if not c.isspace()]) or 1
 
-    if han / total > 0.15:
-        return "zh"
     if (hiragana + katakana) / total > 0.15:
         return "ja"
+    if han / total > 0.15:
+        return "zh"
     if hangul / total > 0.15:
         return "ko"
     if cyrillic / total > 0.15:
@@ -49,14 +57,14 @@ def detect_language(text):
         return "th"
     if arabic / total > 0.15:
         return "ar"
-    if latin / total > 0.3:
-        return "en"
     return None
 
 
 def translate_chunk(text, source, target):
-    """Translate one chunk via translatepy; fallback to MyMemory."""
+    """Translate one chunk via translatepy; fallback to MyMemory.
+    Returns (translated_text, engine, detected_source_or_None)."""
     src = "auto" if source in (None, "", "auto") else source
+    detected = None
 
     # translatepy (aggregates multiple engines including Google)
     try:
@@ -65,27 +73,33 @@ def translate_chunk(text, source, target):
         result = t.translate(text, target, source_language=src)
         out = result.result
         if out and out.strip() and out.strip() != text.strip():
-            return out, "translatepy"
+            engine = "translatepy"
+            # Extract auto-detected source language when src was "auto"
+            if src in (None, "", "auto") and hasattr(result, "source_language"):
+                raw = str(result.source_language)
+                detected = _ISO3_TO_2.get(raw, raw)
+            return out, engine, detected
     except Exception:
         pass
 
-    # MyMemory fallback
+    # MyMemory fallback (only when source is explicit, not auto)
     try:
-        mm_src = src
-        if mm_src == "zh":
-            mm_src = "zh-CN"
-        langpair = "|".join(x for x in [mm_src, target] if x)
-        r = requests.post(
-            "https://api.mymemory.translated.net/get",
-            data={"q": text, "langpair": langpair},
-            timeout=10,
-            headers={"User-Agent": USER_AGENT},
-        )
-        d = r.json()
-        if d.get("responseStatus") == 200:
-            out = d["responseData"]["translatedText"]
-            if out and out.strip() and out.strip() != text.strip():
-                return out, "mymemory"
+        if src not in (None, "", "auto"):
+            mm_src = src
+            if mm_src == "zh":
+                mm_src = "zh-CN"
+            langpair = "|".join(x for x in [mm_src, target] if x)
+            r = requests.post(
+                "https://api.mymemory.translated.net/get",
+                data={"q": text, "langpair": langpair},
+                timeout=10,
+                headers={"User-Agent": USER_AGENT},
+            )
+            d = r.json()
+            if d.get("responseStatus") == 200:
+                out = d["responseData"]["translatedText"]
+                if out and out.strip() and out.strip() != text.strip():
+                    return out, "mymemory", None
     except Exception:
         pass
 
@@ -118,9 +132,11 @@ def translate_text(text, source, target):
         return text, None, None
     detected = None
     if source == "auto" or source in (None, ""):
-        detected = detect_language(text) or "en"
-        src = detected
-        source = detected
+        detected = detect_language(text)
+        # For Latin-script texts (FR/ES/IT/DE etc.), detect_language returns None;
+        # pass "auto" to translatepy so it auto-detects via Google/Microsoft.
+        src = detected if detected else "auto"
+        source = src
     else:
         src = source
 
@@ -132,8 +148,10 @@ def translate_text(text, source, target):
             out.append(b)
             continue
         try:
-            translated, engine = translate_chunk(b, src, target)
+            translated, engine, chunk_detected = translate_chunk(b, src, target)
             used_engine = engine
+            if chunk_detected and not detected:
+                detected = chunk_detected
             out.append(translated)
         except NoTranslatorError:
             out.append(b)

@@ -74,7 +74,7 @@ func TestIntegrationIDPhoto(t *testing.T) {
 	
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	part, _ := writer.CreateFormFile("file", "test.jpg")
+	part, _ := writer.CreateFormFile("file", "test.png")
 	part.Write(imgBuf.Bytes())
 	writer.WriteField("size", "一寸")
 	writer.WriteField("bg_color", "白色")

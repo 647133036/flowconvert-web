@@ -19,6 +19,7 @@ import (
 type ImageGenH struct {
 	Cfg   *config.Config
 	Store *FileStore
+	AI    *service.AIClient
 }
 
 func (h *ImageGenH) writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -46,6 +47,12 @@ func (h *ImageGenH) HandleTextImage(w http.ResponseWriter, r *http.Request) {
 
 	width, _ := strconv.Atoi(r.FormValue("width"))
 	height, _ := strconv.Atoi(r.FormValue("height"))
+	if width <= 0 || width > 4096 {
+		width = 1024
+	}
+	if height <= 0 || height > 4096 {
+		height = 1024
+	}
 
 	tmp, err := h.newTmp()
 	if err != nil {
@@ -54,10 +61,16 @@ func (h *ImageGenH) HandleTextImage(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.cleanupTmp(tmp)
 
-	dest, err := service.MakeImage(tmp, prompt, width, height)
-	if err != nil {
-		h.writeErr(w, http.StatusUnprocessableEntity, err.Error())
-		return
+	var dest string
+	if h.AI != nil {
+		dest, err = service.MakeImageAI(h.AI, tmp, prompt, width, height)
+	}
+	if dest == "" || err != nil {
+		dest, err = service.MakeImage(tmp, prompt, width, height)
+		if err != nil {
+			h.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
 	}
 
 	dl, err := h.registerOutput(dest, "generated.png")
@@ -88,12 +101,20 @@ func (h *ImageGenH) HandleEditImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, _, err := r.FormFile("image")
+	if err := r.ParseMultipartForm(20 << 20); err != nil {
+		h.writeErr(w, http.StatusBadRequest, "上传文件大小超限（单文件最大20MB）")
+		return
+	}
+	file, header, err := r.FormFile("image")
 	if err != nil {
 		h.writeErr(w, http.StatusBadRequest, "请选择要编辑的图像")
 		return
 	}
 	defer file.Close()
+	if header.Size > 20<<20 || !isValidImageType(header.Filename) {
+		h.writeErr(w, http.StatusBadRequest, "图片格式或大小无效")
+		return
+	}
 
 	tmp, err := h.newTmp()
 	if err != nil {
@@ -127,10 +148,16 @@ func (h *ImageGenH) HandleEditImage(w http.ResponseWriter, r *http.Request) {
 		width, height = 2048, 2048
 	}
 
-	dest, err := service.MakeEditedImage(tmp, srcPath, prompt, width, height)
-	if err != nil {
-		h.writeErr(w, http.StatusUnprocessableEntity, err.Error())
-		return
+	var dest string
+	if h.AI != nil {
+		dest, err = service.MakeEditedImageAI(h.AI, tmp, srcPath, prompt, width, height)
+	}
+	if dest == "" || err != nil {
+		dest, err = service.MakeEditedImage(tmp, srcPath, prompt, width, height)
+		if err != nil {
+			h.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
 	}
 
 	dl, err := h.registerOutput(dest, "edited.png")
@@ -166,12 +193,22 @@ func (h *ImageGenH) HandleComposeImage(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.cleanupTmp(tmp)
 
+	if err := r.ParseMultipartForm(20 << 20); err != nil {
+		h.writeErr(w, http.StatusBadRequest, "上传文件大小超限（单文件最大20MB）")
+		return
+	}
+
 	var refPaths []string
 	for i := 0; ; i++ {
 		field := fmt.Sprintf("ref_%d", i)
-		file, _, err := r.FormFile(field)
+		file, header, err := r.FormFile(field)
 		if err != nil {
 			break
+		}
+		if header.Size > 20<<20 || !isValidImageType(header.Filename) {
+			file.Close()
+			h.writeErr(w, http.StatusBadRequest, fmt.Sprintf("参考图 %d 格式或大小无效", i))
+			return
 		}
 		refName := fmt.Sprintf("ref_%d.png", i)
 		refPath := filepath.Join(tmp, refName)
@@ -197,10 +234,16 @@ func (h *ImageGenH) HandleComposeImage(w http.ResponseWriter, r *http.Request) {
 	width, _ := strconv.Atoi(r.FormValue("width"))
 	height, _ := strconv.Atoi(r.FormValue("height"))
 
-	dest, err := service.MakeComposeImage(tmp, prompt, refPaths, width, height)
-	if err != nil {
-		h.writeErr(w, http.StatusUnprocessableEntity, err.Error())
-		return
+	var dest string
+	if h.AI != nil {
+		dest, err = service.MakeComposeImageAI(h.AI, tmp, prompt, refPaths, width, height)
+	}
+	if dest == "" || err != nil {
+		dest, err = service.MakeComposeImage(tmp, prompt, refPaths, width, height)
+		if err != nil {
+			h.writeErr(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
 	}
 
 	dl, err := h.registerOutput(dest, "composed.png")
@@ -231,5 +274,5 @@ func (h *ImageGenH) cleanupTmp(dir string) {
 }
 
 func (h *ImageGenH) registerOutput(path, base string) (string, error) {
-	return h.Store.Register(path, base), nil
+	return h.Store.Register(path, base)
 }

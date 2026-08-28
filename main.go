@@ -5,9 +5,11 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"flowconvert/internal/config"
 	"flowconvert/internal/handler"
+	"flowconvert/internal/service"
 	"flowconvert/web"
 )
 
@@ -18,10 +20,11 @@ func main() {
 	}
 
 	store := handler.NewFileStore(cfg)
+	ai := service.NewAIClient(cfg.AgnesBaseURL, cfg.AgnesAPIKey, cfg.SenseNovaBase, cfg.SenseNovaKey)
 	conv := &handler.ConvertH{Cfg: cfg, Store: store}
 	translator := &handler.TranslateH{Cfg: cfg, Store: store}
-	imageGen := &handler.ImageGenH{Cfg: cfg, Store: store}
-	videoGen := &handler.VideoGenH{Cfg: cfg, Store: store}
+	imageGen := &handler.ImageGenH{Cfg: cfg, Store: store, AI: ai}
+	videoGen := &handler.VideoGenH{Cfg: cfg, Store: store, AI: ai, Jobs: handler.NewVideoJobStore(30 * time.Minute)}
 
 	mux := http.NewServeMux()
 
@@ -40,6 +43,7 @@ func main() {
 	mux.HandleFunc("/api/convert/video/text", videoGen.HandleTextVideo)
 	mux.HandleFunc("/api/convert/video/keyframe", videoGen.HandleKeyframeVideo)
 	mux.HandleFunc("/api/convert/video/ref", videoGen.HandleRefVideo)
+	mux.HandleFunc("/api/convert/video/task/", videoGen.HandleVideoTaskStatus)
 	mux.HandleFunc("/api/download/", store.DownloadHandler)
 
 	// Static + pages

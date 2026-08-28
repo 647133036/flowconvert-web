@@ -3,9 +3,9 @@ package service
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // PdfToOffice converts a PDF to docx/xlsx via Python scripts.
@@ -30,10 +30,9 @@ func PdfToOffice(tmpDir, src, output string) (string, error) {
 	stem := strings.TrimSuffix(filepath.Base(src), filepath.Ext(src))
 	dest := filepath.Join(outDir, stem+"."+output)
 
-	cmd := exec.Command("python3", pyPath, src, dest)
-	out, err := cmd.CombinedOutput()
+	out, err := RunCmdTimeout(5*time.Minute, PythonPath(), pyPath, src, dest)
 	if err != nil {
-		return "", fmt.Errorf("PDF 转换失败: %s", strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("PDF 转换失败: %s", strings.TrimSpace(out))
 	}
 	if _, err := os.Stat(dest); err != nil {
 		return "", fmt.Errorf("未生成输出文件")

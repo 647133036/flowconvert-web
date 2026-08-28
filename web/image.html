@@ -525,10 +525,20 @@ document.addEventListener('DOMContentLoaded', () => {
     editBtn.addEventListener('click', generateEditImage);
   }
 
-  // Compose mode
-  document.querySelectorAll('.ref-input').forEach(input => {
-    input.addEventListener('change', e => handleRefUpload(e));
-  });
+  // Compose mode: delegate click on ref cards to open file picker, and
+  // handle change events via delegation so re-rendered cards keep working.
+  const refGrid = document.querySelector('.ref-grid');
+  if (refGrid) {
+    refGrid.addEventListener('click', e => {
+      const card = e.target.closest('.ref-card');
+      if (!card) return;
+      const input = card.querySelector('input[type="file"]');
+      if (input) input.click();
+    });
+    refGrid.addEventListener('change', e => {
+      if (e.target.matches('input[type="file"].ref-input')) handleRefUpload(e);
+    });
+  }
   
   const composePrompt = $('composePrompt');
   const composeBtn = $('composeBtn');
@@ -574,18 +584,20 @@ function handleRefUpload(e) {
   reader.onload = ev => {
     const card = document.getElementById('refCard' + (idx + 1));
     card.classList.add('has-image');
-    card.innerHTML = `<img src="${ev.target.result}"><span class="ref-label">${idx + 1}</span>`;
-    card.querySelector('input').addEventListener('change', handleRefUpload);
+    // Rebuild card keeping the file input with its data-index so the click &
+    // change delegates (bound on .ref-grid) keep working for re-uploads.
+    card.innerHTML = '<img src="' + ev.target.result + '"><input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="' + idx + '"><span class="ref-label">' + (idx + 1) + '</span>';
   };
   reader.readAsDataURL(file);
-  updateComposeBtn();
+  const cp = $('composePrompt');
+  if (cp) $('composeBtn').disabled = !cp.value.trim();
 }
 
 function updateComposeBtn() {
   $('composeBtn').disabled = !composePrompt.value.trim();
 }
 
-() {
+async function generateTextImage() {
   if (isGenerating) return;
   isGenerating = true;
   showStatus('正在生成图像...');
@@ -602,18 +614,13 @@ function updateComposeBtn() {
     const data = await resp.json();
     
     if (data.success) {
-      $('resultImage').src = '/api/download/' + data.download_url.split('/').pop();
-      $('downloadLink').href = '/api/download/' + data.download_url.split('/').pop();
+      const url = data.download_url;
+      $('resultImage').src = url;
+      $('downloadLink').href = url;
       showResult('图像生成成功！');
     } else {
       showError(data.error || '生成失败');
     }
-  } catch (err) {
-    showError(err.message || '生成失败，请重试');
-  } finally {
-    isGenerating = false;
-  }
-}
   } catch (err) {
     showError(err.message || '生成失败，请重试');
   } finally {
@@ -638,7 +645,7 @@ async function generateEditImage() {
     const data = await resp.json();
     
     if (data.success) {
-      const url = '/api/download/' + data.download_url.split('/').pop();
+      const url = data.download_url;
       $('resultImage').src = url;
       $('downloadLink').href = url;
       showResult('图像编辑成功！');
@@ -672,7 +679,7 @@ async function generateComposeImage() {
     const data = await resp.json();
     
     if (data.success) {
-      const url = '/api/download/' + data.download_url.split('/').pop();
+      const url = data.download_url;
       $('resultImage').src = url;
       $('downloadLink').href = url;
       showResult('图像合成成功！');

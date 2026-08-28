@@ -39,7 +39,7 @@ Entries discovered by the Agent during task execution should follow this format:
   - Go embed.FS with fs.ReadFile requires exact path matching - no double prefix concatenation
   - When using strings.TrimPrefix(path, "/") to get relative path, do NOT prepend "static/" again in ReadFile call
   - Bug pattern: fs.ReadFile(assets, "static/" + name) where name already contains "static/" prefix causes 404
-  - Correct pattern: fs.ReadFile(assets, name) where name = strings.TrimPrefix(requestPath, "/")
+   - Correct pattern: fs.ReadFile(assets, name) where name = strings.TrimPrefix(requestPath, "/")
 
 [Project Knowledge Summary]
 - Date: 2026-08-25
@@ -49,58 +49,76 @@ Entries discovered by the Agent during task execution should follow this format:
   - Build command: cd /workspace && go build -o flowconvert .
   - Run command: ./flowconvert --port 8080
   - Project structure: main.go (entry), internal/{config,handler,service}, web/{static,html}, scripts/{python}
-  - Python dependencies required: opencv-contrib-python-headless, pillow, numpy, pdfminer.six, fpdf2, python-docx, openpyxl, python-pptx, deep-translator, vtracer, pillow
+   - Python dependencies required: opencv-contrib-python-headless, pillow, numpy, pdfminer.six, fpdf2, python-docx, openpyxl, python-pptx, translatepy, vtracer
 
 [Project Knowledge Summary]
-- Date: 2026-08-25
-- Context: Discovered by Agent while implementing ID photo generation feature
+- Date: 2026-08-25~27
+- Context: ID photo, vectorize, translation feature fixes
 - Category: Troubleshooting & Debugging
 - Instructions:
-  - opencv-python-headless 5.0+ does not include CascadeClassifier - use FaceDetectorYN or DNN models instead
-  - Download SSD face detection model: res10_300x300_ssd_iter_140000.caffemodel + deploy.prototxt to /tmp/models/
-  - Portrait photo algorithm: DNN face detection -> LAB color segmentation -> GrabCut refinement -> Alpha composite
-   - Standard ID photo: head occupies 70-80% of image height, face center at ~38% from top
+  - ID photo: use rembg u2netp model (4.57MB) not bria-rmbg (1GB); OpenCV 5.x removed CascadeClassifier
+  - ID photo shoulder detection: alpha-channel analysis; smart_crop priority: face_info > alpha > center
+  - ID photo algorithm: alpha hard threshold <0.15→0, >0.85→255 before compositing; zero mixed pixels
+  - ID photo crop: head_total = shoulder_y - head_top, crop_h = head_total / 0.80, dpi=(300,300) in PIL save
+  - ID photo head positioning: v67 algorithm, scale directly to output canvas, bilinear interp; head 7.7%-77.7%
+  - ID photo endpoint: POST /api/convert/idphoto returns raw PNG (not JSON)
+  - Vectorize input types: imageExts = ["jpg","jpeg","png","bmp","tiff","tif","webp","gif"]; .ai NOT accepted
+  - AI format: Inkscape exports PDF; copy PDF to .ai (AI spec is PDF-compatible)
+  - PDF translation: OCR via pdf2image+pytesseract for image PDFs; fallback pdfminer for text PDFs
+  - reportlab requires TrueType fonts (TTC not supported); use wqy-zenhei.ttc or DroidSansFallbackFull.ttf
+  - Install poppler-utils for pdf2image; tesseract-ocr with chi_sim/chi_tra for CJK OCR
+  - Translation API: JSON body uses "source"/"target"; RunCmd timeout 60s prevents proxy 502/504
 
 [Project Knowledge Summary]
-- Date: 2026-08-26
-- Context: Discovered while fixing vectorize, translation, and idphoto features
+- Date: 2026-08-27
+- Context: Long video (>12s) multi-segment concatenation fix
 - Category: Troubleshooting & Debugging
 - Instructions:
-  - AI format conversion: Inkscape exports PDF, not .ai directly; copy PDF to .ai file (AI spec is PDF-compatible)
-  - Vectorize input types: imageExts = ["jpg","jpeg","png","bmp","tiff","tif","webp","gif"] - .ai files are NOT accepted as input
-  - translatepy works in this environment via Google Translate (translate.google.com accessible)
-  - translate.py uses source_language parameter (not source) for translatepy Translator.translate()
-  - MyMemory fallback engine returns empty engine string when translatepy succeeds - track engine after successful call
-  - ID photo: rembg u2netp model (4.57MB) preferred over bria-rmbg (1GB) for speed
-  - ID photo crop algorithm: alpha-channel-based shoulder detection, head_total = shoulder_y - head_top_y, crop_h = head_total / 0.80
-  - ID photo width constraint: when head_width/crop_width > 0.70, enlarge crop to head_width/0.60
-  - ID photo DPI: must set dpi=(300,300) in PIL save() for correct print dimensions
-  - ID photo endpoint: POST /api/convert/idphoto returns raw PNG image (not JSON)
-  - Translation API field names: JSON body uses "source" and "target" (not "source_language"/"target_language")
-  - RunCmd timeout: 60 seconds default prevents proxy 502/504 errors on long translations
+  - ffmpeg concat demuxer resolves paths against LIST FILE's directory, NOT process cwd
+  - Always convert segment paths to absolute (filepath.Abs) before writing into concat list file
+  - Agnes API returns 1280x704 (16:9) / 704x1280 (9:16), h264 24fps, aac audio
+  - Agnes occasionally fails segments with "DiffGenerator returned no result"; retry same request succeeds
+  - Multi-segment generation should retry each segment (not silently drop it)
+  - Real AI video verification: /tmp/opencode/concat_probe/ contains downloaded Agnes sample videos
 
 [Project Knowledge Summary]
-- Date: 2026-08-25
-- Context: Discovered by Agent while debugging FlowConvert static file serving issue
+- Date: 2026-08-27
+- Context: Discovered by Agent while fixing long video (>12s) multi-segment concatenation failure
 - Category: Troubleshooting & Debugging
 - Instructions:
-  - Go embed.FS with fs.ReadFile requires exact path matching - no double prefix concatenation
-  - When using strings.TrimPrefix(path, "/") to get relative path, do NOT prepend "static/" again in ReadFile call
-  - Bug pattern: fs.ReadFile(assets, "static/" + name) where name already contains "static/" prefix causes 404
-  - Correct pattern: fs.ReadFile(assets, name) where name = strings.TrimPrefix(requestPath, "/")
+  - ffmpeg concat demuxer resolves relative paths in the list file against the LIST FILE's directory, NOT the process cwd
+  - When TmpDir is a relative path (e.g. "data/tmp"), writing `file 'data/tmp/vid_x/seg.mp4'` into a list file located at data/tmp/vid_x/ yields a doubled path (data/tmp/vid_x/data/tmp/vid_x/seg.mp4) and fails
+  - Fix: always convert segment paths to absolute (filepath.Abs) before writing into the concat list file
+  - Agnes video API returns 1280x704 (16:9) / 704x1280 (9:16), h264 24fps, time_base 1/12288, aac audio, duration ~= requested+float
+  - Agnes occasionally fails segments transiently with "DiffGenerator returned no result"; retry same request succeeds - add per-segment retry in multi-segment generation
+  - Multi-segment video generation should retry each segment (not silently drop it) to avoid incomplete videos
+   - Real AI video verification: /tmp/opencode/concat_probe/ contains downloaded Agnes sample videos
 
 [Project Knowledge Summary]
-- Date: 2026-08-26
-- Context: Fixed ID photo edge quality and PDF translation
+- Date: 2026-08-28
+- Context: Fixed multi-provider translation fallback and language detection in scripts/translate.py
 - Category: Troubleshooting & Debugging
 - Instructions:
-  - ID photo edge fix: hard threshold alpha < 0.15 → 0, alpha > 0.85 → 255 before compositing
-  - ID photo edges now show 0 mixed pixels (was 7588-10869) and 60%+ pure background pixels
-  - PDF translation uses OCR (pdf2image + pytesseract) for image-based PDFs, fallback to pdfminer for text PDFs
-  - reportlab requires TrueType fonts (TTC with postscript outlines not supported); use wqy-zenhei.ttc or DroidSansFallbackFull.ttf
-  - Install poppler-utils for pdf2image; install tesseract-ocr with chi_sim/chi_tra langs for CJK OCR
-  - Go build: go build -o flowConvert . (scripts are NOT embedded, only HTML files in web/embed.go)
-  - ID photo shoulder detection: OpenCV 5.x removed CascadeClassifier; use rembg alpha channel analysis as primary method
-  - ID photo smart_crop priority: face_info (alpha-estimated) > alpha-based detection > center fallback
-  - ID photo face estimation from alpha: face_y = top + person_h * 0.35, face_h = person_h * 0.30, face_w = face_h * 0.72
-  - ID photo crop formula: head_total = shoulder_y - head_top, crop_h = head_total / 0.80, bottom = top + crop_h
+  - translatepy services: Google✓, Yandex✓, DeepL✓, LibreTranslate✓(with key), TranslateCom✓, MyMemory✓
+  - translatepy's MyMemory translator uses IE7 UA by default; direct API test must use browser UA
+  - detect_language must return None for Latin scripts (FR/DE/ES/IT/PT/NL), not "en"
+  - Reorder detect_language checks: hiragana/katakana BEFORE han (Japanese text has CJK ideographs)
+  - translate_chunk returns (text, engine, detected_src); detected from result.source_language.alpha2
+  - ISO3→ISO2 mapping in translate.py: _ISO3_TO_2 dict (fra→fr, deu→de, esp→es, etc.)
+  - MyMemory langpair must use explicit 2-letter codes; auto|XX rejected with 403
+  - Go build: go build -ldflags="-s -w" -o flowConvert . produces 7.2MB stripped binary
+  - Test: go test ./... all green; system curl tests all pass
+
+## 项目构建与运行
+
+- 构建命令: `go build -o flowConvert .`
+- 运行命令: `./flowConvert`
+- 默认监听端口: 8080
+- 测试命令: `go test ./...`
+
+## 项目依赖
+
+- Python 3 + pip 包: pandas, openpyxl, python-docx, pdf2docx, Pillow, translatepy
+- ONNX Runtime (用于证件照抠图模型)
+- Tesseract OCR (chi_sim+eng) 用于 PDF 扫描件翻译
+- 翻译服务：translatepy (Google/DeepL/MyMemory/TranslateCom 自动切换，无需 API Key)

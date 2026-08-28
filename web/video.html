@@ -6,6 +6,12 @@
 <title>视频生成 - FlowConvert</title>
 <link rel="stylesheet" href="/static/css/style.css">
 <style>
+.container {
+  max-width: 860px;
+}
+.page-content {
+  max-width: 860px;
+}
 .video-tabs {
   display: flex;
   gap: 8px;
@@ -79,6 +85,100 @@
   text-align: center;
   font-weight: 600;
   color: var(--primary);
+}
+.ratio-btns {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.ratio-btn {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.ratio-btn:hover {
+  border-color: var(--primary);
+}
+.ratio-btn.active {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+.seg-hint {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--primary);
+  margin-left: 8px;
+}
+.duration-marks {
+  position: relative;
+  height: 18px;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+  user-select: none;
+}
+.duration-marks span {
+  position: absolute;
+  bottom: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  cursor: default;
+}
+.param-group input[type="range"] {
+  width: 100%;
+  height: 10px;
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 5px;
+  background: var(--border);
+  outline: none;
+  cursor: pointer;
+}
+.param-group input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary);
+  cursor: pointer;
+  border: 3px solid #fff;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  transition: transform 0.1s;
+}
+.param-group input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+.param-group input[type="range"]::-webkit-slider-thumb:active {
+  transform: scale(1.05);
+}
+.param-group input[type="range"]::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: 5px;
+}
+.param-group input[type="range"]::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary);
+  cursor: pointer;
+  border: 3px solid #fff;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.param-group input[type="range"]::-moz-range-track {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--border);
+}
+.param-group input[type="range"]::-moz-range-progress {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--primary);
 }
 .upload-grid {
   display: grid;
@@ -168,6 +268,27 @@
   left: 0;
   color: var(--success);
 }
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--surface2);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 12px;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+  transition: width 0.5s ease;
+  width: 0%;
+}
+.progress-text {
+  font-size: 0.85rem;
+  color: var(--text2);
+  margin-top: 8px;
+  text-align: center;
+}
 </style>
 </head>
 <body>
@@ -206,16 +327,21 @@
       <textarea class="prompt-area" id="textPrompt" placeholder="描述你想要的视频内容，例如：一个宁静的湖畔，夕阳西下，湖面倒映着晚霞，远处有飞鸟掠过..."></textarea>
     </div>
     <div class="param-group">
-      <label>视频时长 <span class="duration-value" id="durationValue">30</span> 秒</label>
-      <input type="range" id="durationSlider" min="5" max="60" value="30" step="5">
+      <label>视频时长 <span class="duration-value" id="durationValue">5</span> 秒 <span id="segHint" class="seg-hint"></span></label>
+      <input type="range" id="durationSlider" min="4" max="120" value="5" step="1">
+       <div class="duration-marks" data-min="4" data-max="120">
+         <span data-val="4">4s</span><span data-val="12">12s</span><span data-val="30">30s</span><span data-val="60">60s</span><span data-val="120">120s</span>
+       </div>
     </div>
     <div class="param-group">
-      <label>分辨率</label>
-      <select id="textResolution" class="select">
-        <option value="1080p">1080p (1920×1080)</option>
-        <option value="720p">720p (1280×720)</option>
-        <option value="480p">480p (854×480)</option>
-      </select>
+      <label>画面比例</label>
+      <div class="ratio-btns" id="textRatioBtns">
+        <button class="ratio-btn active" data-ratio="16:9">16:9 横屏</button>
+        <button class="ratio-btn" data-ratio="9:16">9:16 竖屏</button>
+        <button class="ratio-btn" data-ratio="1:1">1:1 方形</button>
+        <button class="ratio-btn" data-ratio="4:3">4:3</button>
+        <button class="ratio-btn" data-ratio="3:4">3:4</button>
+      </div>
     </div>
     <button id="textGenerateBtn" class="btn btn-primary" disabled>生成视频</button>
   </div>
@@ -257,8 +383,21 @@
       <textarea class="prompt-area" id="keyframePrompt" placeholder="描述首尾帧之间的过渡效果，例如：从白天渐变到夜晚..." style="min-height:80px;"></textarea>
     </div>
     <div class="param-group">
-      <label>视频时长 <span class="duration-value" id="kfDurationValue">10</span> 秒</label>
-      <input type="range" id="kfDurationSlider" min="5" max="60" value="10" step="5">
+      <label>视频时长 <span class="duration-value" id="kfDurationValue">5</span> 秒 <span id="kfSegHint" class="seg-hint"></span></label>
+      <input type="range" id="kfDurationSlider" min="4" max="120" value="5" step="1">
+       <div class="duration-marks" data-min="4" data-max="120">
+         <span data-val="4">4s</span><span data-val="12">12s</span><span data-val="30">30s</span><span data-val="60">60s</span><span data-val="120">120s</span>
+       </div>
+    </div>
+    <div class="param-group">
+      <label>画面比例</label>
+      <div class="ratio-btns" id="kfRatioBtns">
+        <button class="ratio-btn active" data-ratio="16:9">16:9 横屏</button>
+        <button class="ratio-btn" data-ratio="9:16">9:16 竖屏</button>
+        <button class="ratio-btn" data-ratio="1:1">1:1 方形</button>
+        <button class="ratio-btn" data-ratio="4:3">4:3</button>
+        <button class="ratio-btn" data-ratio="3:4">3:4</button>
+      </div>
     </div>
     <button id="keyframeGenerateBtn" class="btn btn-primary" disabled>生成视频</button>
   </div>
@@ -270,7 +409,7 @@
       <textarea class="prompt-area" id="refPrompt" placeholder="描述你想要的视频内容..."></textarea>
     </div>
     <div class="param-group">
-      <label>参考图片（可选，最多3张）</label>
+      <label>参考图片（可选，最多5张）</label>
       <div class="ref-upload">
         <div class="ref-item" id="refItem1">
           <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="0">
@@ -284,19 +423,32 @@
           <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="2">
           <span class="ref-label">参考图3</span>
         </div>
+        <div class="ref-item" id="refItem4">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="3">
+          <span class="ref-label">参考图4</span>
+        </div>
+        <div class="ref-item" id="refItem5">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="4">
+          <span class="ref-label">参考图5</span>
+        </div>
       </div>
     </div>
     <div class="param-group">
-      <label>参考类型</label>
-      <select id="refType" class="select">
-        <option value="motion">运动参考</option>
-        <option value="style">风格参考</option>
-        <option value="both">运动+风格</option>
-      </select>
+      <label>视频时长 <span class="duration-value" id="refDurationValue">5</span> 秒 <span id="refSegHint" class="seg-hint"></span></label>
+      <input type="range" id="refDurationSlider" min="4" max="120" value="5" step="1">
+       <div class="duration-marks" data-min="4" data-max="120">
+         <span data-val="4">4s</span><span data-val="12">12s</span><span data-val="30">30s</span><span data-val="60">60s</span><span data-val="120">120s</span>
+       </div>
     </div>
     <div class="param-group">
-      <label>视频时长 <span class="duration-value" id="refDurationValue">30</span> 秒</label>
-      <input type="range" id="refDurationSlider" min="5" max="60" value="30" step="5">
+      <label>画面比例</label>
+      <div class="ratio-btns" id="refRatioBtns">
+        <button class="ratio-btn active" data-ratio="16:9">16:9 横屏</button>
+        <button class="ratio-btn" data-ratio="9:16">9:16 竖屏</button>
+        <button class="ratio-btn" data-ratio="1:1">1:1 方形</button>
+        <button class="ratio-btn" data-ratio="4:3">4:3</button>
+        <button class="ratio-btn" data-ratio="3:4">3:4</button>
+      </div>
     </div>
     <button id="refGenerateBtn" class="btn btn-primary" disabled>生成视频</button>
   </div>
@@ -305,6 +457,10 @@
   <div id="status" class="status-panel" hidden>
     <div class="spinner"></div>
     <p id="statusText">正在生成视频...</p>
+    <div id="progressBar" class="progress-bar" hidden>
+      <div id="progressFill" class="progress-fill"></div>
+    </div>
+    <p id="progressText" class="progress-text" hidden></p>
   </div>
 
   <!-- 结果区 -->
@@ -325,11 +481,14 @@
   <div class="format-info">
     <h3>平台适配说明</h3>
     <ul>
-      <li>抖音/快手：竖屏 9:16，分辨率 1080×1920，时长建议 15-60 秒</li>
-      <li>B站/YouTube：横屏 16:9，分辨率 1920×1080，支持 4K</li>
-      <li>小红书：竖屏 3:4 或 9:16，分辨率 1080×1440</li>
-      <li>输出格式：MP4 (H.264)，支持所有主流平台上传</li>
+      <li>抖音/快手：选择 9:16 竖屏，720×1280，时长建议 15-60 秒</li>
+      <li>B站/YouTube：选择 16:9 横屏，1280×720，时长建议 30-120 秒</li>
+      <li>小红书：选择 3:4 竖屏或 9:16，720×960 / 720×1280，时长建议 15-45 秒</li>
+      <li>社交媒体：选择 1:1 方形，720×720，时长建议 4-30 秒</li>
+      <li>输出格式：MP4 (H.264)，720P，支持所有主流平台上传</li>
+      <li>超过 12 秒自动分段生成并拼接，不影响上传</li>
     </ul>
+    <p style="margin:10px 0 0;padding:8px 12px;background:#fff8e1;border-left:4px solid #ffa000;border-radius:4px;color:#b25c00;font-weight:600;">提示：12S 时长的视频生成效果最佳，分段拼接可能存在画面衔接痕迹。</p>
   </div>
 </main>
 
@@ -344,6 +503,9 @@ let isGenerating = false;
 let firstFrameFile = null;
 let lastFrameFile = null;
 let refFiles = [];
+let textRatio = '16:9';
+let kfRatio = '16:9';
+let refRatio = '16:9';
 
 // ── DOM refs ──
 const els = {};
@@ -361,13 +523,12 @@ document.addEventListener('DOMContentLoaded', () => {
   els.lastFrameInput = $('lastFrameInput');
   els.keyframePrompt = $('keyframePrompt');
   els.kfDurationSlider = $('kfDurationSlider');
-  els.kfDurationValue = $('durationValue');
+  els.kfDurationValue = $('kfDurationValue');
   els.keyframeGenerateBtn = $('keyframeGenerateBtn');
   
   els.refPrompt = $('refPrompt');
-  els.refType = $('refType');
   els.refDurationSlider = $('refDurationSlider');
-  els.refDurationValue = $('durationValue');
+  els.refDurationValue = $('refDurationValue');
   els.refGenerateBtn = $('refGenerateBtn');
   
   els.status = $('status');
@@ -383,16 +544,48 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => switchMode(btn.dataset.mode));
   });
 
-  // Duration sliders
+  // Duration sliders with track fill
+  function updateSliderFill(el) {
+    const pct = ((el.value - el.min) / (el.max - el.min)) * 100;
+    el.style.background = `linear-gradient(to right, var(--primary) 0%, var(--primary) ${pct}%, var(--border) ${pct}%, var(--border) 100%)`;
+  }
   els.durationSlider.addEventListener('input', () => {
-    els.durationValue.textContent = els.durationSlider.value;
+    const v = parseInt(els.durationSlider.value);
+    els.durationValue.textContent = v;
+    updateSegHint(v);
+    updateSliderFill(els.durationSlider);
   });
   els.kfDurationSlider.addEventListener('input', () => {
-    $('kfDurationValue').textContent = els.kfDurationSlider.value;
+    const v = parseInt(els.kfDurationSlider.value);
+    $('kfDurationValue').textContent = v;
+    updateSegHint(v, 'kfSegHint');
+    updateSliderFill(els.kfDurationSlider);
   });
   els.refDurationSlider.addEventListener('input', () => {
-    $('refDurationValue').textContent = els.refDurationSlider.value;
+    const v = parseInt(els.refDurationSlider.value);
+    $('refDurationValue').textContent = v;
+    updateSegHint(v, 'refSegHint');
+    updateSliderFill(els.refDurationSlider);
   });
+  updateSliderFill(els.durationSlider);
+  updateSliderFill(els.kfDurationSlider);
+  updateSliderFill(els.refDurationSlider);
+
+  // Align duration marks to slider values
+  document.querySelectorAll('.duration-marks').forEach(container => {
+    const min = parseInt(container.dataset.min);
+    const max = parseInt(container.dataset.max);
+    container.querySelectorAll('span[data-val]').forEach(span => {
+      const val = parseInt(span.dataset.val);
+      const pct = ((val - min) / (max - min)) * 100;
+      span.style.left = pct + '%';
+    });
+  });
+
+  // Aspect ratio buttons
+  setupRatioBtns('textRatioBtns', v => textRatio = v);
+  setupRatioBtns('kfRatioBtns', v => kfRatio = v);
+  setupRatioBtns('refRatioBtns', v => refRatio = v);
 
   // Text mode
   setupDropZone(els.firstFrameZone, els.firstFrameInput, handleFirstFrame);
@@ -403,13 +596,56 @@ document.addEventListener('DOMContentLoaded', () => {
   
   els.keyframeGenerateBtn.addEventListener('click', generateKeyframeVideo);
   els.refGenerateBtn.addEventListener('click', generateRefVideo);
+  els.refPrompt.addEventListener('input', updateRefBtn);
   els.resetBtn.addEventListener('click', resetAll);
   
-  // Ref uploads
-  document.querySelectorAll('.ref-input').forEach(input => {
-    input.addEventListener('change', e => handleRefUpload(e));
-  });
+  // Ref uploads: delegate click on ref items to open file picker, and handle
+  // change via delegation so re-rendered items keep working.
+  const refUpload = document.querySelector('.ref-upload');
+  if (refUpload) {
+    refUpload.addEventListener('click', e => {
+      const item = e.target.closest('.ref-item');
+      if (!item) return;
+      const input = item.querySelector('input[type="file"]');
+      if (input) input.click();
+    });
+    refUpload.addEventListener('change', e => {
+      if (e.target.matches('input[type="file"].ref-input')) handleRefUpload(e);
+    });
+  }
 });
+
+function setupRatioBtns(containerId, callback) {
+  const container = $(containerId);
+  if (!container) return;
+  container.querySelectorAll('.ratio-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      container.querySelectorAll('.ratio-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      callback(btn.dataset.ratio);
+    });
+  });
+}
+
+function updateSegHint(duration, hintId) {
+  var hint = $(hintId || 'segHint');
+  if (!hint) return;
+  if (duration > 12) {
+    var segs = Math.ceil(duration / 12);
+    var minutes = Math.ceil(segs * 1.5);
+    hint.textContent = '将分 ' + segs + ' 段生成并拼接，预计约 ' + minutes + ' 分钟';
+  } else {
+    hint.textContent = '';
+  }
+}
+
+function resetRatioBtns(containerId) {
+  const container = $(containerId);
+  if (!container) return;
+  container.querySelectorAll('.ratio-btn').forEach((b, i) => {
+    b.classList.toggle('active', i === 0);
+  });
+}
 
 function switchMode(mode) {
   currentMode = mode;
@@ -473,8 +709,9 @@ function handleRefUpload(e) {
   reader.onload = ev => {
     const item = document.getElementById('refItem' + (idx + 1));
     item.classList.add('has-image');
-    item.innerHTML = `<img src="${ev.target.result}"><span class="ref-label">${idx + 1}</span>`;
-    item.querySelector('input').addEventListener('change', handleRefUpload);
+    // Rebuild keeping the file input with data-index so the delegated click &
+    // change handlers (bound on .ref-upload) keep working for re-uploads.
+    item.innerHTML = '<img src="' + ev.target.result + '"><input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="' + idx + '"><span class="ref-label">' + (idx + 1) + '</span>';
   };
   reader.readAsDataURL(file);
   updateRefBtn();
@@ -483,34 +720,21 @@ function handleRefUpload(e) {
 function updateRefBtn() {
   els.refGenerateBtn.disabled = !els.refPrompt.value.trim();
 }
-els.refPrompt?.addEventListener('input', updateRefBtn);
 
 async function generateTextVideo() {
   if (isGenerating) return;
   isGenerating = true;
-  showStatus('正在生成视频，请稍候...');
+  const duration = parseInt(els.durationSlider.value);
+  showStatus('正在提交任务...', 0);
+
   try {
     const formData = new FormData();
     formData.append('prompt', els.textPrompt.value);
     formData.append('duration', els.durationSlider.value);
-    formData.append('resolution', els.textResolution.value);
-    
-    const resp = await fetch('/api/convert/video/text', {
-      method: 'POST',
-      body: formData
-    });
-    const data = await resp.json();
-    
-    if (data.success) {
-      const url = '/api/download/' + data.download_url.split('/').pop();
-      $('resultVideo').src = url;
-      $('downloadLink').href = url;
-      showResult('视频生成成功！');
-    } else {
-      showError(data.error || '生成失败');
-    }
+    formData.append('aspect_ratio', textRatio);
+    await submitVideoTask('/api/convert/video/text', formData);
   } catch (err) {
-    showError(err.message || '生成失败，请重试');
+    showError(err.message || '提交任务失败，请重试');
   } finally {
     isGenerating = false;
   }
@@ -519,30 +743,18 @@ async function generateTextVideo() {
 async function generateKeyframeVideo() {
   if (isGenerating) return;
   isGenerating = true;
-  showStatus('正在生成视频...');
+  showStatus('正在提交任务...', 0);
+
   try {
     const formData = new FormData();
     formData.append('first_frame', firstFrameFile);
     formData.append('last_frame', lastFrameFile);
     formData.append('prompt', els.keyframePrompt.value);
     formData.append('duration', els.kfDurationSlider.value);
-    
-    const resp = await fetch('/api/convert/video/keyframe', {
-      method: 'POST',
-      body: formData
-    });
-    const data = await resp.json();
-    
-    if (data.success) {
-      const url = '/api/download/' + data.download_url.split('/').pop();
-      $('resultVideo').src = url;
-      $('downloadLink').href = url;
-      showResult('视频生成成功！');
-    } else {
-      showError(data.error || '生成失败');
-    }
+    formData.append('aspect_ratio', kfRatio);
+    await submitVideoTask('/api/convert/video/keyframe', formData);
   } catch (err) {
-    showError(err.message || '生成失败，请重试');
+    showError(err.message || '提交任务失败，请重试');
   } finally {
     isGenerating = false;
   }
@@ -551,47 +763,163 @@ async function generateKeyframeVideo() {
 async function generateRefVideo() {
   if (isGenerating) return;
   isGenerating = true;
-  showStatus('正在生成视频...');
+  showStatus('正在提交任务...', 0);
+
   try {
     const formData = new FormData();
     formData.append('prompt', els.refPrompt.value);
-    formData.append('ref_type', els.refType.value);
     formData.append('duration', els.refDurationSlider.value);
-    refFiles.forEach((file, idx) => {
-      if (file) formData.append('ref_' + idx, file);
-    });
-    
-    const resp = await fetch('/api/convert/video/ref', {
-      method: 'POST',
-      body: formData
-    });
-    const data = await resp.json();
-    
-    if (data.success) {
-      const url = '/api/download/' + data.download_url.split('/').pop();
-      $('resultVideo').src = url;
-      $('downloadLink').href = url;
-      showResult('视频生成成功！');
-    } else {
-      showError(data.error || '生成失败');
+    formData.append('aspect_ratio', refRatio);
+    const files = Array.isArray(refFiles) ? refFiles : [];
+    for (let i = 0; i < files.length; i++) {
+      if (files[i]) formData.append('ref_' + i, files[i]);
     }
+    await submitVideoTask('/api/convert/video/ref', formData);
   } catch (err) {
-    showError(err.message || '生成失败，请重试');
+    showError(err.message || '提交任务失败，请重试');
   } finally {
     isGenerating = false;
   }
 }
 
-function showStatus(text) {
+// submitVideoTask posts the form and polls the async job until it completes.
+async function submitVideoTask(endpoint, formData) {
+  const startTime = Date.now();
+  let resp = await fetch(endpoint, { method: 'POST', body: formData });
+  let data;
+  try {
+    data = await resp.json();
+  } catch (e) {
+    throw new Error('服务器响应异常，请重试');
+  }
+  if (!data.success || !data.task_id) {
+    throw new Error(data.error || '提交任务失败');
+  }
+
+  const taskId = data.task_id;
+  const elapsedSec = () => Math.floor((Date.now() - startTime) / 1000);
+
+  // Background progress simulation while polling
+  const progInterval = setInterval(() => {
+    const t = elapsedSec();
+    let pct, msg;
+    if (t < 30) {
+      pct = Math.min(t * 3, 30);
+      msg = `等待 AI 处理中... ${t}s`;
+    } else if (t < 120) {
+      pct = 30 + (t - 30) * 0.5;
+      msg = `AI 正在生成视频片段... 请耐心等待 (${Math.ceil((180 - t) / 60)} 分钟)`;
+    } else {
+      pct = Math.min(90, 60 + (t - 120) * 0.3);
+      msg = `正在拼接视频片段... (${Math.ceil((300 - t) / 60)} 分钟)`;
+    }
+    updateProgress(pct, msg);
+    if (t >= 300) clearInterval(progInterval);
+  }, 5000);
+
+  try {
+    // Poll up to 45 minutes
+    for (let attempt = 0; attempt < 900; attempt++) {
+      const sresp = await fetch('/api/convert/video/task/' + taskId);
+      let sdata;
+      try {
+        sdata = await sresp.json();
+      } catch (e) {
+        await sleep(3000);
+        continue;
+      }
+      if (sdata.status === 'completed') {
+        const url = sdata.download_url;
+        $('resultVideo').src = url;
+        $('downloadLink').href = url;
+        updateProgress(100, '完成！');
+        if (sdata.notice) {
+          showResultWithNotice('视频生成成功', sdata.notice);
+        } else {
+          showResult('视频生成成功！');
+        }
+        return;
+      }
+      if (sdata.status === 'failed') {
+        throw new Error(sdata.error || '视频生成失败');
+      }
+      if (sresp.status === 404) {
+        throw new Error('任务不存在或已过期，请重新生成');
+      }
+      await sleep(3000);
+    }
+    throw new Error('生成超时，请稍后重试');
+  } finally {
+    clearInterval(progInterval);
+  }
+}
+
+function showStatus(text, progress) {
   els.status.hidden = false;
   els.result.hidden = true;
   els.statusText.textContent = text;
+  if (progress !== undefined) {
+    const bar = $('progressBar');
+    const fill = $('progressFill');
+    const progText = $('progressText');
+    if (bar && fill && progText) {
+      bar.hidden = false;
+      progText.hidden = false;
+      fill.style.width = Math.min(progress, 100) + '%';
+      progText.textContent = progress < 100 ? `生成中... ${Math.round(progress)}%` : '完成！';
+    }
+  }
+}
+
+function updateProgress(pct, text) {
+  const bar = $('progressBar');
+  const fill = $('progressFill');
+  const progText = $('progressText');
+  if (!bar || !fill || !progText) return;
+  bar.hidden = false;
+  progText.hidden = false;
+  fill.style.width = Math.min(pct, 100) + '%';
+  progText.textContent = text || `生成中... ${Math.round(pct)}%`;
 }
 
 function showResult(text) {
   els.status.hidden = true;
   els.result.hidden = false;
   els.resultText.textContent = text;
+  els.resultText.style.color = '';
+  hideNotice();
+  if (els.resultVideo) {
+    els.resultVideo.style.display = 'block';
+  }
+}
+
+function showResultWithNotice(text, notice) {
+  els.status.hidden = true;
+  els.result.hidden = false;
+  els.resultText.textContent = text;
+  els.resultText.style.color = '';
+  showNotice(notice);
+  if (els.resultVideo) {
+    els.resultVideo.style.display = 'block';
+  }
+}
+
+function showNotice(msg) {
+  let el = $('resultNotice');
+  if (!el) {
+    el = document.createElement('p');
+    el.id = 'resultNotice';
+    el.style.cssText = 'margin:8px 0;padding:10px 12px;background:#fef3c7;border:1px solid #fcd34d;border-radius:var(--radius-sm);color:#92400e;font-size:0.85rem;';
+    const link = $('downloadLink');
+    link.parentNode.insertBefore(el, link);
+  }
+  el.textContent = msg;
+  el.hidden = false;
+}
+
+function hideNotice() {
+  const el = $('resultNotice');
+  if (el) el.hidden = true;
 }
 
 function showError(msg) {
@@ -599,11 +927,20 @@ function showError(msg) {
   els.result.hidden = false;
   els.resultText.textContent = msg;
   els.resultText.style.color = '#ef4444';
+  hideNotice();
+  if (els.resultVideo) {
+    els.resultVideo.style.display = 'none';
+  }
 }
 
 function hideResult() {
   els.status.hidden = true;
   els.result.hidden = true;
+  hideNotice();
+  if (els.resultVideo) {
+    els.resultVideo.style.display = 'none';
+    els.resultVideo.removeAttribute('src');
+  }
 }
 
 function resetAll() {
@@ -614,12 +951,24 @@ function resetAll() {
   els.textPrompt.value = '';
   els.keyframePrompt.value = '';
   els.refPrompt.value = '';
-  els.durationSlider.value = 30;
-  els.kfDurationSlider.value = 10;
-  els.refDurationSlider.value = 30;
-  els.durationValue.textContent = '30';
-  $('kfDurationValue').textContent = '10';
-  $('refDurationValue').textContent = '30';
+  els.durationSlider.value = 5;
+  els.kfDurationSlider.value = 5;
+  els.refDurationSlider.value = 5;
+  els.durationValue.textContent = '5';
+  $('segHint').textContent = '';
+  $('kfSegHint').textContent = '';
+  $('refSegHint').textContent = '';
+  $('kfDurationValue').textContent = '5';
+  updateSliderFill(els.durationSlider);
+  updateSliderFill(els.kfDurationSlider);
+  updateSliderFill(els.refDurationSlider);
+  $('refDurationValue').textContent = '5';
+  textRatio = '16:9';
+  kfRatio = '16:9';
+  refRatio = '16:9';
+  resetRatioBtns('textRatioBtns');
+  resetRatioBtns('kfRatioBtns');
+  resetRatioBtns('refRatioBtns');
   els.textGenerateBtn.disabled = true;
   els.keyframeGenerateBtn.disabled = true;
   els.refGenerateBtn.disabled = true;
@@ -643,7 +992,7 @@ function resetAll() {
   `;
   
   // Reset ref items
-  for (let i = 1; i <= 3; i++) {
+  for (let i = 1; i <= 5; i++) {
     const item = document.getElementById('refItem' + i);
     item.classList.remove('has-image');
     item.innerHTML = `<input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="${i-1}"><span class="ref-label">参考图${i}</span>`;

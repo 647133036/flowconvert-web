@@ -47,17 +47,15 @@ func (c *ConvertH) saveUpload(r *http.Request, field string, allowExts []string)
 		return "", "", fmt.Errorf("文件超过 50MB 限制")
 	}
 
-	// Read first 512 bytes for magic
-	buf := make([]byte, 512)
-	n, _ := io.ReadFull(file, buf)
-	if n < 4 {
+	fileData, err := io.ReadAll(io.LimitReader(file, c.Cfg.MaxSize+1))
+	if err != nil || int64(len(fileData)) > c.Cfg.MaxSize {
+		return "", "", fmt.Errorf("文件读取失败或超过 50MB 限制")
+	}
+	if len(fileData) < 4 {
 		return "", "", fmt.Errorf("文件内容无效")
 	}
-	// rewind
-	if seeker, ok := file.(io.Seeker); ok {
-		_, _ = seeker.Seek(0, io.SeekStart)
-	}
-	ctype := http.DetectContentType(buf[:n])
+
+	ctype := http.DetectContentType(fileData[:min(512, len(fileData))])
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(header.Filename)), ".")
 	if !allowedType(ext, ctype, allowExts) {
 		return "", "", fmt.Errorf("不支持的文件类型: .%s", ext)
@@ -65,37 +63,41 @@ func (c *ConvertH) saveUpload(r *http.Request, field string, allowExts []string)
 
 	tmpName := fmt.Sprintf("up_%s.%s", strconv.FormatInt(time.Now().UnixNano(), 10), ext)
 	tmpPath := filepath.Join(c.Cfg.TmpDir, tmpName)
-	f, err := os.Create(tmpPath)
-	if err != nil {
+	if err := os.WriteFile(tmpPath, fileData, 0o644); err != nil {
 		return "", "", fmt.Errorf("服务器错误，请重试")
-	}
-	defer f.Close()
-	total, err := io.Copy(f, io.LimitReader(file, c.Cfg.MaxSize+1))
-	if err != nil {
-		_ = os.Remove(tmpPath)
-		return "", "", fmt.Errorf("文件保存失败")
-	}
-	if total > c.Cfg.MaxSize {
-		_ = os.Remove(tmpPath)
-		return "", "", fmt.Errorf("文件超过 50MB 限制")
 	}
 	return tmpPath, ext, nil
 }
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// allowedType accepts an upload only when BOTH the extension is in the
+// allow list AND the sniffed content matches that extension's registered
+// MIME type. Every currently allowed upload format (images, pdf) has a
+// sniffable signature, so a payload with mismatched content is rejected.
 func allowedType(ext, ctype string, allow []string) bool {
+	inList := false
 	for _, a := range allow {
 		if ext == a {
-			return true
+			inList = true
+			break
 		}
 	}
-	// also check mime prefix
-	for _, a := range allow {
-		m := mime.TypeByExtension("." + a)
-		if m != "" && strings.HasPrefix(ctype, strings.Split(m, ";")[0]) {
-			return true
-		}
+	if !inList {
+		return false
 	}
-	return false
+	m := mime.TypeByExtension("." + ext)
+	if m == "" {
+		// No registered MIME for this extension; extension membership is all we can verify.
+		return true
+	}
+	base := strings.Split(m, ";")[0]
+	return strings.HasPrefix(ctype, base)
 }
 
 // newTmp creates a per-request working directory.
@@ -112,8 +114,7 @@ func (c *ConvertH) cleanupTmp(dir string) {
 }
 
 func (c *ConvertH) registerOutput(path, base string) (string, error) {
-	urlPath := c.Store.Register(path, base)
-	return urlPath, nil
+	return c.Store.Register(path, base)
 }
 
 // ── Image → Vector ──
@@ -121,6 +122,10 @@ func (c *ConvertH) registerOutput(path, base string) (string, error) {
 var imageExts = []string{"jpg", "jpeg", "png", "bmp", "tiff", "tif", "webp", "gif"}
 
 func (c *ConvertH) HandleUploadVectorize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		c.writeErr(w, http.StatusMethodNotAllowed, "仅支持POST请求")
+		return
+	}
 	src, ext, err := c.saveUpload(r, "file", imageExts)
 	if err != nil {
 		c.writeErr(w, http.StatusBadRequest, err.Error())
@@ -172,6 +177,10 @@ func parseVecParams(r *http.Request) service.VecParams {
 }
 
 func (c *ConvertH) HandleURLVectorize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		c.writeErr(w, http.StatusMethodNotAllowed, "仅支持GET/POST请求")
+		return
+	}
 	url := r.URL.Query().Get("url")
 	output := r.URL.Query().Get("output")
 	if output == "" {
@@ -229,6 +238,10 @@ func parseIntDefault(v string, def int) int {
 // ── PDF → Office ──
 
 func (c *ConvertH) HandlePdfToOffice(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		c.writeErr(w, http.StatusMethodNotAllowed, "仅支持POST请求")
+		return
+	}
 	src, ext, err := c.saveUpload(r, "file", []string{"pdf"})
 	if err != nil {
 		c.writeErr(w, http.StatusBadRequest, err.Error())
@@ -268,6 +281,10 @@ func (c *ConvertH) HandlePdfToOffice(w http.ResponseWriter, r *http.Request) {
 // ── Sketch ──
 
 func (c *ConvertH) HandleSketch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		c.writeErr(w, http.StatusMethodNotAllowed, "仅支持POST请求")
+		return
+	}
 	src, ext, err := c.saveUpload(r, "file", imageExts)
 	if err != nil {
 		c.writeErr(w, http.StatusBadRequest, err.Error())
@@ -304,6 +321,10 @@ func (c *ConvertH) HandleSketch(w http.ResponseWriter, r *http.Request) {
 // ── ID Photo ──
 
 func (c *ConvertH) HandleIdPhoto(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		c.writeErr(w, http.StatusMethodNotAllowed, "仅支持POST请求")
+		return
+	}
 	src, ext, err := c.saveUpload(r, "file", imageExts)
 	if err != nil {
 		c.writeErr(w, http.StatusBadRequest, err.Error())
@@ -345,7 +366,7 @@ func (c *ConvertH) HandleIdPhoto(w http.ResponseWriter, r *http.Request) {
 func (c *ConvertH) HandleFormats(w http.ResponseWriter, r *http.Request) {
 	c.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":        true,
-		"image_input":    []string{"jpg", "png", "bmp", "tiff", "webp", "gif"},
+		"image_input":    []string{"jpg", "jpeg", "png", "bmp", "tiff", "webp", "gif"},
 		"vector_output": []string{"svg", "ai", "dxf", "eps", "fig", "sk", "pdf"},
 		"pdf_output":     []string{"docx", "xlsx"},
 		"max_upload_mb":  50,

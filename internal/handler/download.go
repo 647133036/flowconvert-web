@@ -39,11 +39,28 @@ func NewFileStore(cfg *config.Config) *FileStore {
 	return fs
 }
 
+// sanitizeNamePart strips quotes and control characters from a filename
+// component so it can be embedded safely in the Content-Disposition header,
+// and caps its length.
+func sanitizeNamePart(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || r == '"' || r == '\\' || r == 0x2028 || r == 0x2029 {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	out := b.String()
+	if len(out) > 80 {
+		out = out[:80]
+	}
+	return out
+}
+
 // lookupName builds a unique download name for a file.
 func lookupName(path, baseName string) string {
 	name := filepath.Base(path)
 	if baseName != "" {
-		// sanitize baseName
 		baseName = filepath.Base(baseName)
 		if strings.ContainsAny(baseName, "/\\") {
 			baseName = ""
@@ -54,25 +71,20 @@ func lookupName(path, baseName string) string {
 	}
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
-	return fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), stem, ext)
+	return fmt.Sprintf("%d_%s_%s%s", time.Now().UnixNano(), service.NewID(4), sanitizeNamePart(stem), sanitizeNamePart(ext))
 }
 
 // Register assigns a download name and returns the URL path.
-// It copies the source file into the persistent output directory.
-func (fs *FileStore) Register(path, baseName string) string {
+// It copies the source file into the persistent output directory; if the
+// copy fails it returns an error rather than silently registering a path
+// that will be deleted by tmp cleanup.
+func (fs *FileStore) Register(path, baseName string) (string, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	name := lookupName(path, baseName)
 	dst := filepath.Join(fs.outDir, name)
 	if err := service.CopyFile(path, dst); err != nil {
-		// Fall back to registering the original path
-		fs.files[name] = storedFile{
-			path:       path,
-			downloadAs: name,
-			created:    time.Now(),
-			registerAt: time.Now(),
-		}
-		return "/api/download/" + name
+		return "", err
 	}
 	fs.files[name] = storedFile{
 		path:       dst,
@@ -80,7 +92,7 @@ func (fs *FileStore) Register(path, baseName string) string {
 		created:    time.Now(),
 		registerAt: time.Now(),
 	}
-	return "/api/download/" + name
+	return "/api/download/" + name, nil
 }
 
 func (fs *FileStore) gcLoop() {

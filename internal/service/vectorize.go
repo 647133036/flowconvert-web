@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // VecParams are the user-selectable vectorization settings.
@@ -125,10 +126,9 @@ func Vectorize(tmpDir, src, output string, p VecParams) (string, error) {
 		if output == "ai" {
 			pdfPath := filepath.Join(tmpDir, "result.pdf")
 			args := []string{"--export-type=pdf", "--export-filename=" + pdfPath, svgPath}
-			cmd := exec.Command(inkscape, args...)
-			out, err := cmd.CombinedOutput()
+			out, err := RunCmdTimeout(2*time.Minute, inkscape, args...)
 			if err != nil {
-				return "", fmt.Errorf("inkscape 转换失败: %s", strings.TrimSpace(string(out)))
+				return "", fmt.Errorf("inkscape 转换失败: %s", strings.TrimSpace(out))
 			}
 			if _, err := os.Stat(pdfPath); err != nil {
 				return "", fmt.Errorf("inkscape 输出文件缺失")
@@ -142,10 +142,9 @@ func Vectorize(tmpDir, src, output string, p VecParams) (string, error) {
 		dest := filepath.Join(tmpDir, "result."+output)
 		ext := output
 		args := []string{"--export-type=" + ext, "--export-filename=" + dest, svgPath}
-		cmd := exec.Command(inkscape, args...)
-		out, err := cmd.CombinedOutput()
+		out, err := RunCmdTimeout(2*time.Minute, inkscape, args...)
 		if err != nil {
-			return "", fmt.Errorf("inkscape 转换失败: %s", strings.TrimSpace(string(out)))
+			return "", fmt.Errorf("inkscape 转换失败: %s", strings.TrimSpace(out))
 		}
 		if _, err := os.Stat(dest); err != nil {
 			// Fallback: inkscape might have named it differently
@@ -168,10 +167,9 @@ func Vectorize(tmpDir, src, output string, p VecParams) (string, error) {
 			return "", fmt.Errorf("PBM 转换失败: %s", strings.TrimSpace(out))
 		}
 		dest := filepath.Join(tmpDir, "result.dxf")
-		cmd := exec.Command(potrace, "-b", "dxf", "-o", dest, pbmPath)
-		out, err := cmd.CombinedOutput()
+		out, err := RunCmdTimeout(2*time.Minute, potrace, "-b", "dxf", "-o", dest, pbmPath)
 		if err != nil {
-			return "", fmt.Errorf("potrace 转换失败: %s", strings.TrimSpace(string(out)))
+			return "", fmt.Errorf("potrace 转换失败: %s", strings.TrimSpace(out))
 		}
 		if _, err := os.Stat(dest); err != nil {
 			return "", fmt.Errorf("potrace 输出文件缺失")

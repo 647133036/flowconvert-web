@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>常见问题 - FlowConvert</title>
+<title>关于与常见问题 - FlowConvert</title>
 <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
@@ -16,31 +16,27 @@
       <a href="/translate">翻译</a>
       <a href="/video">视频生成</a>
       <a href="/image">图像生成</a>
-      <a href="/about" class="active">常见问题</a>
+      <a href="/about" class="active">关于</a>
       <a href="/donate">赞赏支持</a>
     </div>
   </div>
 </nav>
 
 <main class="container page-content">
-  <h1>常见问题</h1>
+  <h1>关于 FlowConvert</h1>
 
   <section class="faq-section">
-    <h2>关于格式转换</h2>
+    <h2>平台简介</h2>
+    <p>FlowConvert 是一站式本地文件转换与 AI 创作平台，基于 Go 后端构建，集成 VTracer、Potrace、Inkscape、Tesseract OCR、Agnes AI 视频模型等开源与商用引擎，所有处理均在服务器端即时完成。</p>
+  </section>
+
+  <section class="faq-section">
+    <h2>功能模块</h2>
 
     <details class="faq-item" open>
-      <summary>支持哪些图片格式转矢量？</summary>
-      <p>支持 JPG、PNG、BMP、TIFF、WebP、GIF 等常见栅格格式。输出矢量格式包括 SVG、AI (Adobe Illustrator)、DXF (CAD)、EPS、SK (Sketch)、FIG (Figma)。</p>
-    </details>
-
-    <details class="faq-item">
-      <summary>什么是栅格图和矢量图的区别？</summary>
-      <p>栅格图（如 JPG、PNG）由像素构成，放大后会模糊。矢量图（如 SVG、AI）由数学曲线构成，无限放大不失真，适用于印刷、Logo、CAD 等场景。FlowConvert 通过智能描摹算法将像素图转为矢量路径。</p>
-    </details>
-
-    <details class="faq-item">
-      <summary>PDF 可以转哪些 Office 格式？</summary>
-      <p>支持将 PDF 转为 Word (.docx) 和 Excel (.xlsx) 格式，方便进一步编辑。转换通过 LibreOffice 引擎完成，尽量保留原始排版。</p>
+      <summary>格式转换（图片转矢量 / PDF 转 Office）</summary>
+      <p><strong>图片转矢量：</strong>支持 JPG、PNG、BMP、TIFF、WebP、GIF 等栅格格式，输出 SVG、AI（Adobe Illustrator）、DXF（CAD）、EPS、SK（Sketch）、FIG（Figma）。采用 VTracer（彩色/复杂图）与 Potrace（黑白图）双引擎自动择优，并通过 Inkscape 完成多格式导出。</p>
+      <p><strong>PDF 转 Office：</strong>支持转为 Word（.docx）和 Excel（.xlsx）。先提取 PDF 文本层；对于扫描版、照片式 PDF（无文本层）会自动启用 OCR（Tesseract，中英文识别）将图片文字识别后写入文档。普通 PDF 直接保留文本内容，扫描件经 OCR 还原。</p>
     </details>
 
     <details class="faq-item">
@@ -52,6 +48,32 @@
       <summary>为什么我转出的 AI/EPS 文件打不开？</summary>
       <p>AI 和 EPS 由 Inkscape 生成，遵循标准格式规范。如果打不开，建议先用 SVG 格式导出，再将 SVG 导入目标软件。部分老旧软件可能不支持新版 AI 格式。</p>
     </details>
+
+    <details class="faq-item">
+      <summary>AI 视频生成</summary>
+      <p>基于 Agnes 2.5 Flash 视频模型，支持纯文本生成、首尾帧过渡、参考图引导三种模式，输出 720P、16:9 / 9:16 / 1:1 等多种比例。</p>
+      <p><strong>时长说明：</strong>单次生成上限 12 秒。超过 12 秒会自动分段生成再拼接；分段间通过阶段化叙事提示词保证内容衔接。<span style="color:#b25c00;font-weight:600;">12 秒时长的视频生成效果最佳，分段拼接可能出现画面衔接痕迹。</span></p>
+    </details>
+
+    <details class="faq-item">
+      <summary>证件照制作</summary>
+      <p>上传照片后自动抠图换底，支持蓝底、白底、红底等常用规格，输出标准证件照尺寸。</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>文件翻译</summary>
+      <p>支持 TXT、PDF、DOCX、HTML、XLSX、PPTX 等文档翻译，翻译完成后输出原格式文件。</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>图像生成与编辑</summary>
+      <p>文生图、图像编辑、图像合成，基于 AI 图像模型生成或修改图片。</p>
+    </details>
+
+    <details class="faq-item">
+      <summary>照片转素描</summary>
+      <p>将照片处理为铅笔素描风格，基于 OpenCV 颜色减淡算法生成。</p>
+    </details>
   </section>
 
   <section class="faq-section">
@@ -59,34 +81,34 @@
 
     <details class="faq-item">
       <summary>文件会保存多久？</summary>
-      <p>转换后的文件在服务器上保留 1 小时后自动删除。我们建议您及时下载。上传的原文件在转换完成后会立即删除，不留存。</p>
+      <p>转换后的文件在服务器上保留一段时间后自动删除，建议您及时下载。上传的原文件在转换完成后会立即清理。</p>
     </details>
 
     <details class="faq-item">
       <summary>文件安全吗？</summary>
-      <p>完全安全。所有文件均在服务器端即时处理，转换完成后立即清理。我们不存储、不分析、不分享您的文件内容。上传通道经过 SSRF 防护和 MIME 校验，防止恶意利用。</p>
+      <p>所有文件均在服务器端即时处理，不长期存储、不分析、不分享您的文件内容。上传通道经过来源校验和 MIME 校验。</p>
     </details>
 
     <details class="faq-item">
       <summary>有文件大小限制吗？</summary>
-      <p>图片上传限制为 50MB，URL 下载限制为 20MB。PDF 转 Office 同样适用 50MB 限制。如果文件较大，处理时间会相应延长。</p>
+      <p>图片上传限制为 50MB，URL 下载限制为 20MB，PDF 转 Office 同样适用 50MB 限制。文件越大处理时间越长。</p>
     </details>
 
     <details class="faq-item">
       <summary>支持批量转换吗？</summary>
-      <p>当前版本仅支持单文件转换。批量转换功能正在开发中，敬请期待。</p>
+      <p>当前版本支持单文件转换，批量转换功能规划中。</p>
     </details>
   </section>
 
   <section class="faq-section">
-    <h2>技术支持</h2>
-    <p>FlowConvert 基于 Go 构建，使用 VTracer / Potrace / Inkscape / LibreOffice 等开源工具。如果您遇到问题或有建议，欢迎通过 GitHub Issues 或邮箱 647133036@qq.com 反馈。</p>
+    <h2>技术与反馈</h2>
+    <p>FlowConvert 后端基于 Go 构建，集成 VTracer / Potrace / Inkscape / Tesseract OCR / Agnes AI 等引擎。如您遇到问题或有建议，欢迎通过 GitHub Issues 或邮箱 647133036@qq.com 反馈。</p>
     <p><strong>域名：</strong>flowconvert.cn</p>
   </section>
 </main>
 
 <footer class="footer">
-  <p>FlowConvert &copy; 2026 · 基于 Go + OpenCode 构建 · <a href="https://beian.miit.gov.cn/" target="_blank">桂ICP备XXXXXX号-X</a> · <a href="https://beian.mps.gov.cn/#/query/webSearch?code=桂公网安备XXXXXXXXXXXXXXX号" target="_blank">桂公网安备XXXXXXXXXXXXXXX号</a></p>
+  <p>FlowConvert &copy; 2026 · 基于 Go 构建 · <a href="https://beian.miit.gov.cn/" target="_blank">桂ICP备XXXXXX号-X</a> · <a href="https://beian.mps.gov.cn/#/query/webSearch?code=桂公网安备XXXXXXXXXXXXXXX号" target="_blank">桂公网安备XXXXXXXXXXXXXXX号</a></p>
 </footer>
 </body>
 </html>

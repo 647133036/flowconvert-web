@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
-"""证件照背景替换 - 基于 rembg (U2Net)
+"""证件照生成 - 参照 HivisionIDPhoto 实现方式重写
 
-输出 PNG/JPG，写入 DPI 元数据，确保打印物理尺寸正确。
+管线（与 HivisionIDPhoto 一致）:
+  1. 人像抠图 (rembg u2netp) -> RGBA
+  2. MTCNN 人脸检测 -> face_rect
+  3. 依据 head_measure_ratio / head_height_ratio 计算裁剪框
+  4. get_box 检测裁剪后人像边界并修正（左右空隙/头顶距离/底部落下）
+  5. 渲染背景色
+  6. 缩放到目标标准尺寸
 """
 import sys
 import json
 import os
 import io
+import math
 
 import numpy as np
-from PIL import Image, ImageOps, ImageEnhance
+import cv2
+from PIL import Image, ImageOps
 
 DPI = 300
 PX_PER_MM = DPI / 25.4
@@ -45,6 +53,11 @@ BACKGROUNDS = {
     "青色": (0, 191, 255),
 }
 
+# HivisionIDPhoto 默认布局参数
+HEAD_MEASURE_RATIO = 0.2  # 人脸面积占裁剪面积的期望比值
+HEAD_HEIGHT_RATIO = 0.45  # 人脸中心距裁剪框顶部的比例
+HEAD_TOP_RANGE = (0.12, 0.1)  # 头顶距照片顶部的范围 (max, min)
+
 
 def mm_to_px(mm):
     return max(1, int(round(mm * PX_PER_MM)))
@@ -60,412 +73,327 @@ def remove_background(pil_img):
     return result.convert("RGBA")
 
 
-def detect_face(pil_img):
-    """人脸检测 - 使用 rembg alpha 通道估算"""
-    try:
-        from rembg import remove, new_session
-        session = new_session(model_name="u2netp")
-        rgba = remove(pil_img, session=session).convert("RGBA")
-        alpha = np.array(rgba.split()[-1])
-        h, w = alpha.shape
+class FaceDetector:
+    """MTCNN 人脸检测（参照 hivision/creator/face_detector.py detect_face_mtcnn）"""
+    def __init__(self):
+        from mtcnnruntime import MTCNN
+        self.mtcnn = MTCNN()
 
-        # 前景行
-        row_sum = alpha.sum(axis=1)
-        fg_rows = np.where(row_sum > w * 0.08)[0]
-        if len(fg_rows) < 20:
+    def detect(self, img_bgr, scale=2):
+        """检测原图中的人脸，返回 face_rect (x, y, w, h) 或 None"""
+        try:
+            faces = self._detect_once(img_bgr, scale)
+            if faces is not None:
+                return faces
+            # 保险措施：缩放检测失败则用原图再检测一次
+            return self._detect_once(img_bgr, 1)
+        except Exception:
             return None
 
-        top = fg_rows[0]
-        bottom = fg_rows[-1]
-        person_h = bottom - top
-
-        # 水平中心
-        col_sum = alpha.sum(axis=0)
-        fg_cols = np.where(col_sum > h * 0.08)[0]
-        center_x = (fg_cols[0] + fg_cols[-1]) // 2 if len(fg_cols) > 0 else w // 2
-
-        # 人脸位置估算（标准证件照比例）
-        # 头顶在人物顶部略上方，脸中心约在人物上部 35% 处
-        face_y = int(top + person_h * 0.35)
-        face_h = int(person_h * 0.30)
-        face_w = int(face_h * 0.72)
-
-        return (center_x, face_y, face_w, face_h)
-    except Exception:
-        pass
-    return None
-
-
-def locate_head_from_alpha(rgba):
-    """从 rembg 的 alpha 通道推断头部位置（不需要额外模型）
-    
-    原理：人物 alpha 通道中，
-    - 头部区域：前景宽度较窄（额头到下巴）
-    - 颈部：前景宽度最小
-    - 肩部：前景宽度突然变大
-    
-    返回 (center_x, face_center_y, face_h, head_top, shoulder_y) 或 None
-    """
-    alpha = np.array(rgba.split()[-1])
-    h, w = alpha.shape
-
-    # 每行的前景像素数
-    row_fg = np.array([(alpha[y] > 30).sum() for y in range(h)], dtype=float)
-
-    # 找到前景的上下边界
-    fg_rows = np.where(row_fg > w * 0.05)[0]
-    if len(fg_rows) < 20:
-        return None
-
-    top = fg_rows[0]
-    bottom = fg_rows[-1]
-    total_h = bottom - top
-
-    # 策略：找头部区域（顶部附近的第一个宽度峰值），
-    # 然后肩部 = 头部峰值之后宽度再次显著增大的位置
-    window = max(5, total_h // 30)
-
-    # 从顶部开始扫描，找头部宽度峰值
-    # 头部区域：宽度快速增大到峰值后趋于平稳（到达下巴/脖子）
-    # 用宽度变化率检测：找宽度增长率骤降的位置
-    head_peak_y = top
-    head_peak_w = row_fg[top]
-    
-    # 先平滑宽度
-    smooth = np.convolve(row_fg, np.ones(window)/window, mode='same')
-    
-    # 扫描前 50% 高度，找第一个"增长停滞"点
-    # 头部底部：连续多行宽度不再显著增长
-    search_end = min(bottom, top + int(total_h * 0.5))
-    stall_count = 0
-    stall_y = None
-    for y in range(top + window, search_end - window):
-        prev_w = smooth[y - window]
-        cur_w = smooth[y]
-        growth = cur_w - prev_w
-        if growth < smooth[y] * 0.02:
-            stall_count += 1
-            if stall_y is None:
-                stall_y = y
-            if stall_count >= window * 2:
-                head_peak_y = stall_y
-                head_peak_w = smooth[stall_y]
-                break
+    def _detect_once(self, img_bgr, scale):
+        if scale > 1:
+            small = cv2.resize(
+                img_bgr,
+                (img_bgr.shape[1] // scale, img_bgr.shape[0] // scale),
+                interpolation=cv2.INTER_AREA,
+            )
         else:
-            stall_count = 0
-            stall_y = None
-            if cur_w > head_peak_w:
-                head_peak_w = cur_w
-                head_peak_y = y
-
-    # 肩部检测策略：
-    # 1. 先在 head_peak_y 附近找宽度峰值
-    # 2. 从峰值下方扫描，找宽度首次超过 head_peak_w * 1.15 的位置
-    # 3. 如果没找到（紧凑半身照/全身照），用下巴位置反推
-    shoulder_y = None
-    search_limit = min(bottom, head_peak_y + int(total_h * 0.5))
-    for y in range(head_peak_y, search_limit):
-        local_w = smooth[y]
-        if local_w > head_peak_w * 1.15 and local_w > w * 0.10:
-            shoulder_y = y
-            break
-
-    # 如果没找到（紧凑半身照，肩部宽度与头部接近），用下巴位置反推
-    if shoulder_y is None:
-        # 下巴位置 ≈ 头部峰值下方约 0.55 倍头部高度（人脸中心到下巴的距离）
-        # 脖子高 ≈ 脸高的 0.2-0.25，肩部 ≈ 下巴 + 脖子
-        chin_y = head_peak_y + int(head_peak_w / w * total_h * 0.55)
-        # 更可靠的方式：从 face_info 获取下巴位置
-        # 或者用：头部峰值宽度对应的位置往下，宽度开始稳定下降后的位置
-        # 找颈部最窄点（宽度开始回升前的最低点）
-        neck_y = head_peak_y
-        neck_min_w = float('inf')
-        for y in range(head_peak_y, min(bottom, head_peak_y + int(total_h * 0.3))):
-            if smooth[y] < neck_min_w:
-                neck_min_w = smooth[y]
-                neck_y = y
-        # 从颈部往下，找到宽度开始显著增大的位置
-        for y in range(neck_y, min(bottom, neck_y + int(total_h * 0.25))):
-            if smooth[y] > neck_min_w * 1.10:
-                shoulder_y = y
-                break
-        if shoulder_y is None:
-            # 最终 fallback：基于人脸检测或固定比例
-            shoulder_y = head_peak_y + int(head_peak_w / w * total_h * 0.8)
-
-    # 确保肩部在合理范围内（不超过底部，不低于头部峰值下方 20%）
-    shoulder_y = max(head_peak_y + int(total_h * 0.2), min(shoulder_y, bottom))
-
-    # 头部高度 = 顶部到肩部
-    head_h = shoulder_y - top
-    if head_h < 30:
-        # 极端情况：用面部中心反推
-        if face_info is not None:
-            fx, fy, fw, fh = face_info
-            head_h = int(fh * 1.5)
-            shoulder_y = top + head_h
-        else:
-            head_h = total_h * 0.35
-            shoulder_y = top + int(head_h)
-
-    # 人脸中心 ≈ 头部中下部（眉线到下巴的中间）
-    face_center_y = top + int(head_h * 0.55)
-    face_h = int(head_h * 0.65)
-
-    # 水平中心：取头部区域的前景重心
-    head_region = alpha[top:shoulder_y]
-    cols = np.where(head_region.sum(axis=0) > head_region.shape[0] * 0.1)[0]
-    center_x = int(cols.mean()) if len(cols) > 0 else w // 2
-
-    return (center_x, face_center_y, face_h, top, shoulder_y)
+            small = img_bgr
+        faces, _ = self.mtcnn.detect(small, thresholds=[0.8, 0.8, 0.8])
+        if faces is None:
+            return None
+        faces = faces.tolist()
+        if len(faces) != 1:
+            return None
+        face = faces[0]
+        left, top, right, bottom = face[0], face[1], face[2], face[3]
+        if scale > 1:
+            left, top, right, bottom = (v * scale for v in (left, top, right, bottom))
+        width = right - left + 1
+        height = bottom - top + 1
+        return (int(left), int(top), int(width), int(height))
 
 
-def smart_crop(rgba, face_info, target_ratio):
-    """按证件照标准裁剪（肩膀以上为主）:
+_detector = None
 
-    证件照规范：
-    - 头部（含头发）占画面高度的 ~70%
-    - 头顶距画面顶部 ~5%
-    - 下巴到画面底部 ~20-25%（只露肩膀领口，不露太多身体）
-    - 整体裁剪高度不超过原图高度的 50%
 
-    优先使用 face_info 定位人脸，fallback 用 alpha 通道
-    返回 (crop_image, method_name)
+def detect_face(img_bgr):
+    global _detector
+    if _detector is None:
+        _detector = FaceDetector()
+    return _detector.detect(img_bgr)
+
+
+def get_box(image, model=1, correction_factor=None, thresh=127):
+    """参照 hivision/creator/utils.py get_box
+
+    输入四通道图像，返回最大连续非透明区域的矩形信息。
+    model=1 返回 [y_up, y_down, x_left, x_right]（坐标）
+    model=2 返回 [y_up, height-y_down, x_left, width-x_right]（距边距离）
     """
-    src_w, src_h = rgba.size
+    if correction_factor is None:
+        correction_factor = [0, 0, 0, 0]
+    if not isinstance(image, np.ndarray) or len(cv2.split(image)) != 4:
+        raise TypeError("输入的图像必须为四通道 np.ndarray 类型矩阵！")
+    if isinstance(correction_factor, int):
+        correction_factor = [0, 0, correction_factor, correction_factor]
+    elif not isinstance(correction_factor, list):
+        raise TypeError("correction_factor 必须为 int 或者 list 类型！")
 
-    # 方案1：优先使用 face_info
-    if face_info is not None:
-        fx, fy, fw, fh = face_info
-        # 下巴位置
-        chin_y = int(fy + fh * 0.35)
-        # 头顶位置（含头发）
-        head_top = int(fy - fh * 0.55)
-        # 肩部位置（下巴下方 8-12% 脸高，标准证件照只露少量肩膀）
-        shoulder_y = int(chin_y + fh * 0.10)
+    _, _, _, mask = cv2.split(image)
+    _, mask = cv2.threshold(mask, thresh=thresh, maxval=255, type=0)
+    contours, hierarchy = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    temp = np.ones(image.shape, np.uint8) * 255
+    cv2.drawContours(temp, contours, -1, (0, 0, 255), -1)
+    contours_area = [cv2.contourArea(cnt) for cnt in contours]
+    idx = contours_area.index(max(contours_area))
+    x, y, w, h = cv2.boundingRect(contours[idx])
 
-        head_total = shoulder_y - head_top
-
-        # 裁剪高度 = 头肩高 / 0.75 (让头肩占 75%)
-        crop_h = int(head_total / 0.75)
-
-        # 限制：底部不超过肩部下方 15px（证件照只露少量肩膀）
-        max_bottom = shoulder_y + 15
-        allowed_h = max_bottom - head_top
-        if crop_h > allowed_h:
-            crop_h = allowed_h
-
-        # 严格限制：不超过原图高度的 45%
-        max_crop_h = int(src_h * 0.45)
-        crop_h = min(crop_h, max_crop_h)
-
-        crop_w = int(crop_h * target_ratio)
-        crop_h = min(crop_h, src_h)
-        crop_w = min(crop_w, src_w)
-
-        crop_top = int(head_top - 0.03 * crop_h)
-        crop_left = int(fx - crop_w / 2)
-
-        crop_top = max(0, min(crop_top, src_h - crop_h))
-        crop_left = max(0, min(crop_left, src_w - crop_w))
-        if crop_top + crop_h > src_h:
-            crop_top = src_h - crop_h
-
-        # 裁剪基础区域
-        base_crop = rgba.crop((crop_left, crop_top, crop_left + crop_w, crop_top + crop_h))
-
-        # 添加透明底部填充（约 15% 的高度，确保背景色可见）
-        padding_h = int(crop_h * 0.15)
-        new_h = crop_h + padding_h
-        new_canvas = Image.new("RGBA", (crop_w, new_h), (0, 0, 0, 0))
-        new_canvas.paste(base_crop, (0, 0))
-
-        return new_canvas, "face_padded"
-
-    # 方案2：从 alpha 通道定位头部
-    alpha_info = locate_head_from_alpha(rgba)
-
-    if alpha_info is not None:
-        cx, face_y, face_h, head_top, shoulder_y = alpha_info
-
-        head_total = shoulder_y - head_top
-        crop_h = int(head_total / 0.75)
-
-        # 限制：底部不超过肩部下方 15px
-        max_bottom = shoulder_y + 15
-        allowed_h = max_bottom - head_top
-        if crop_h > allowed_h:
-            crop_h = allowed_h
-
-        # 严格限制：不超过原图高度的 45%
-        max_crop_h = int(src_h * 0.45)
-        crop_h = min(crop_h, max_crop_h)
-
-        crop_w = int(crop_h * target_ratio)
-        crop_h = min(crop_h, src_h)
-        crop_w = min(crop_w, src_w)
-
-        # 宽度约束
-        _alpha = np.array(rgba.split()[-1])
-        head_region = _alpha[head_top: head_top + int(head_total * 0.5)]
-        head_cols = np.where(head_region.sum(axis=0) > head_region.shape[0] * 0.1)[0]
-        head_width = head_cols[-1] - head_cols[0] + 1 if len(head_cols) > 0 else 0
-        if head_width < 30:
-            head_width = int(face_h * 0.75)
-        if crop_w > 0 and head_width / crop_w > 0.70:
-            crop_w_new = min(int(head_width / 0.60), src_w)
-            crop_h_new = int(crop_w_new / target_ratio)
-            crop_h_new = min(crop_h_new, src_h)
-            if crop_h_new > crop_h:
-                crop_w, crop_h = crop_w_new, crop_h_new
-
-        crop_top = int(head_top - 0.05 * crop_h)
-        crop_left = int(cx - crop_w / 2)
-
-        crop_top = max(0, min(crop_top, src_h - crop_h))
-        crop_left = max(0, min(crop_left, src_w - crop_w))
-        if crop_top + crop_h > src_h:
-            crop_top = src_h - crop_h
-
-        base_crop = rgba.crop((crop_left, crop_top, crop_left + crop_w, crop_top + crop_h))
-
-        # 添加透明底部填充（约 15% 的高度，确保背景色可见）
-        padding_h = int(crop_h * 0.15)
-        new_h = crop_h + padding_h
-        new_canvas = Image.new("RGBA", (crop_w, new_h), (0, 0, 0, 0))
-        new_canvas.paste(base_crop, (0, 0))
-
-        return new_canvas, "alpha_padded"
-
-    # 方案2：用 face_info (Haar Cascade)
-    if face_info is not None:
-        fx, fy, fw, fh = face_info
-        head_h = fh * 1.5  # 估算含头发的头部高度
-        crop_h = int(head_h / 0.70)
-        crop_w = int(crop_h * target_ratio)
-        crop_h = min(crop_h, src_h)
-        crop_w = min(crop_w, src_w)
-
-        head_top = fy - fh * 0.5
-        crop_top = int(head_top - 0.05 * crop_h)
-        crop_left = int(fx - crop_w / 2)
-
-        crop_top = max(0, min(crop_top, src_h - crop_h))
-        crop_left = max(0, min(crop_left, src_w - crop_w))
-
-        return rgba.crop((crop_left, crop_top, crop_left + crop_w, crop_top + crop_h)), "haar"
-
-    # 方案3：从 alpha 前景范围 fallback 裁剪
-    alpha = np.array(rgba.split()[-1])
-    row_fg = np.array([(alpha[y] > 30).sum() for y in range(alpha.shape[0])], dtype=float)
-    fg_rows = np.where(row_fg > alpha.shape[1] * 0.05)[0]
-
-    if len(fg_rows) > 20:
-        top = fg_rows[0]
-        bottom = fg_rows[-1]
-        person_h = bottom - top
-        # 只取上 70%（肩膀以上）
-        crop_h = int(person_h * 0.70)
-        crop_w = int(crop_h * target_ratio)
-        crop_top = max(0, top - int(0.05 * crop_h))
-        crop_left = max(0, (src_w - crop_w) // 2)
-        if crop_top + crop_h > src_h:
-            crop_top = src_h - crop_h
-        return rgba.crop((crop_left, crop_top, crop_left + crop_w, crop_top + crop_h)), "alpha_fallback"
-
-    # 方案4：纯中心裁剪上半部分
-    if src_w / src_h > target_ratio:
-        crop_h = int(src_h * 0.75)
-        crop_w = int(crop_h * target_ratio)
+    height, width, _ = image.shape
+    y_up = y - correction_factor[0] if y - correction_factor[0] >= 0 else 0
+    y_down = (
+        y + h + correction_factor[1]
+        if y + h + correction_factor[1] < height
+        else height - 1
+    )
+    x_left = x - correction_factor[2] if x - correction_factor[2] >= 0 else 0
+    x_right = (
+        x + w + correction_factor[3]
+        if x + w + correction_factor[3] < width
+        else width - 1
+    )
+    if model == 1:
+        return [y_up, y_down, x_left, x_right]
+    elif model == 2:
+        return [y_up, height - y_down, x_left, width - x_right]
     else:
-        crop_w = src_w
-        crop_h = int(crop_w / target_ratio)
-    crop_top = max(0, (src_h - crop_h) // 4)
-    crop_left = max(0, (src_w - crop_w) // 2)
-    return rgba.crop((crop_left, crop_top, crop_left + crop_w, crop_top + crop_h)), "center"
+        raise EOFError("请选择正确的模式！")
 
 
-def resize_and_composite(crop_rgba, target_w, target_h, bg_rgb):
-    """缩放并合成到纯色背景，边缘使用硬阈值+羽化处理"""
-    resized = crop_rgba.resize((target_w, target_h), Image.LANCZOS)
-    alpha_raw = np.array(resized.split()[-1]).astype(np.float32)
+def detect_distance(value, crop_height, max=0.06, min=0.04):
+    """参照 hivision/creator/utils.py detect_distance
 
-    # 硬阈值：alpha < 0.15 设为 0（纯透明），alpha > 0.85 设为 255（纯不透明）
-    # 中间区域保留 0.15-0.85 的渐变，形成 2px 左右的羽化边缘
-    alpha = alpha_raw.copy()
-    alpha[alpha < 38] = 0       # 0.15 * 255
-    alpha[alpha > 217] = 255    # 0.85 * 255
-
-    fg = np.array(resized.convert("RGB")).astype(np.float32)
-    alpha = alpha / 255.0
-    alpha_a = alpha[:, :, np.newaxis]
-
-    bg = np.full((target_h, target_w, 3), bg_rgb, dtype=np.float32)
-    result = (fg * alpha_a + bg * (1.0 - alpha_a)).astype(np.uint8)
-
-    # 确保四角是纯背景色
-    corner = 4
-    result[:corner, :] = bg_rgb
-    result[-corner:, :] = bg_rgb
-    result[:, :corner] = bg_rgb
-    result[:, -corner:] = bg_rgb
-
-    return Image.fromarray(result, "RGB")
+    检测人头顶与照片顶部距离是否在适当范围内。
+    返回 (status, move_value)：
+      status=0 不动；status=1 人像应向上移动(框向下)；status=-1 人像应向下移动(框向上)
+    """
+    value = value / crop_height
+    if min <= value <= max:
+        return 0, 0
+    elif value > max:
+        move_value = value - max
+        move_value = int(move_value * crop_height)
+        return 1, move_value
+    else:
+        move_value = min - value
+        move_value = int(move_value * crop_height)
+        return -1, move_value
 
 
-def make_idphoto(image_path, out_path, size_key, bg_key):
-    """生成证件照主函数"""
+def idphotos_cut(x1, y1, x2, y2, img):
+    """参照 hivision/creator/photo_adjuster.py IDphotos_cut
+
+    按裁剪框裁剪；超出图像范围的部分用全透明补位。
+    """
+    crop_size = (y2 - y1, x2 - x1)
+    temp_x_1 = temp_y_1 = temp_x_2 = temp_y_2 = 0
+
+    if y1 < 0:
+        temp_y_1 = abs(y1)
+        y1 = 0
+    if y2 > img.shape[0]:
+        temp_y_2 = y2
+        y2 = img.shape[0]
+        temp_y_2 = temp_y_2 - y2
+    if x1 < 0:
+        temp_x_1 = abs(x1)
+        x1 = 0
+    if x2 > img.shape[1]:
+        temp_x_2 = x2
+        x2 = img.shape[1]
+        temp_x_2 = temp_x_2 - x2
+
+    background = np.zeros((crop_size[0], crop_size[1], 4), dtype=np.uint8)
+    background[
+        temp_y_1: crop_size[0] - temp_y_2, temp_x_1: crop_size[1] - temp_x_2
+    ] = img[y1:y2, x1:x2]
+    return background
+
+
+def move_bottom(input_image):
+    """参照 hivision/creator/photo_adjuster.py move
+
+    当照片底部存在空隙时，将人像下移使底部与画面底部贴合。
+    返回 (处理后的图, 下移量)。
+    """
+    png_img = input_image
+    height, width, channels = png_img.shape
+    y_low, y_high, _, _ = get_box(png_img, model=2)
+    base = np.zeros((y_high, width, channels), dtype=np.uint8)
+    png_img = png_img[0: height - y_high, :, :]
+    png_img = np.concatenate((base, png_img), axis=0)
+    return png_img, y_high
+
+
+def adjust_photo(matting_bgra, face_rect, standard_size):
+    """参照 hivision/creator/photo_adjuster.py adjust_photo
+
+    standard_size: (高, 宽) 像素
+    返回裁剪并修正后的四通道图像（尚未缩放至标准尺寸）。
+    """
+    x, y = face_rect[0], face_rect[1]
+    w, h = face_rect[2], face_rect[3]
+    height, width = matting_bgra.shape[:2]
+    width_height_ratio = standard_size[0] / standard_size[1]
+
+    # Step2. 计算高级参数
+    face_center = (x + w / 2, y + h / 2)
+    face_measure = w * h
+    crop_measure = face_measure / HEAD_MEASURE_RATIO
+    resize_ratio = crop_measure / (standard_size[0] * standard_size[1])
+    resize_ratio_single = math.sqrt(resize_ratio)
+    crop_size = (
+        int(standard_size[0] * resize_ratio_single),
+        int(standard_size[1] * resize_ratio_single),
+    )
+
+    # 裁剪框的定位信息
+    x1 = int(face_center[0] - crop_size[1] / 2)
+    y1 = int(face_center[1] - crop_size[0] * HEAD_HEIGHT_RATIO)
+    y2 = y1 + crop_size[0]
+    x2 = x1 + crop_size[1]
+
+    # Step3, 裁剪框的调整
+    cut_image = idphotos_cut(x1, y1, x2, y2, matting_bgra)
+    cut_image = cv2.resize(cut_image, (crop_size[1], crop_size[0]))
+    y_top, y_bottom, x_left, x_right = get_box(
+        cut_image.astype(np.uint8), model=2, correction_factor=0
+    )
+
+    # Step5. 判定人像位置是否合理
+    if x_left > 0 or x_right > 0:
+        status_left_right = 1
+        cut_value_top = int(((x_left + x_right) * width_height_ratio) / 2)
+    else:
+        status_left_right = 0
+        cut_value_top = 0
+
+    status_top, move_value = detect_distance(
+        y_top - cut_value_top,
+        crop_size[0],
+        max=HEAD_TOP_RANGE[0],
+        min=HEAD_TOP_RANGE[1],
+    )
+
+    # Step6. 第二轮裁剪
+    if status_left_right == 0 and status_top == 0:
+        result_image = cut_image
+    else:
+        result_image = idphotos_cut(
+            x1 + x_left,
+            y1 + cut_value_top + status_top * move_value,
+            x2 - x_right,
+            y2 - cut_value_top + status_top * move_value,
+            matting_bgra,
+        )
+
+    # Step7. 当照片底部存在空隙时，下拉至底部
+    result_image, y_high = move_bottom(result_image.astype(np.uint8))
+
+    return result_image
+
+
+def standard_photo_resize(input_image, size):
+    """参照 hivision/creator/photo_adjuster.py standard_photo_resize
+
+    size: (高, 宽)
+    当缩放比例 >= 2 时逐级缩放防止像素丢失。
+    """
+    resize_ratio = input_image.shape[0] / size[0]
+    resize_item = int(round(input_image.shape[0] / size[0]))
+    if resize_ratio >= 2:
+        result_image = input_image
+        for i in range(resize_item - 1):
+            if i == 0:
+                result_image = cv2.resize(
+                    input_image,
+                    (size[1] * (resize_item - i - 1), size[0] * (resize_item - i - 1)),
+                    interpolation=cv2.INTER_AREA,
+                )
+            else:
+                result_image = cv2.resize(
+                    result_image,
+                    (size[1] * (resize_item - i - 1), size[0] * (resize_item - i - 1)),
+                    interpolation=cv2.INTER_AREA,
+                )
+    else:
+        result_image = cv2.resize(
+            input_image, (size[1], size[0]), interpolation=cv2.INTER_AREA
+        )
+    return result_image
+
+
+def add_background(bgra, rgb):
+    """将透明人像合成到纯色背景（参照 hivision/utils.py add_background pure_color）"""
+    b, g, r, a = cv2.split(bgra)
+    a_cal = a / 255.0
+    bgr = rgb[::-1]
+    output = cv2.merge((
+        b * a_cal + bgr[0] * (1 - a_cal),
+        g * a_cal + bgr[1] * (1 - a_cal),
+        r * a_cal + bgr[2] * (1 - a_cal),
+    ))
+    return output.astype(np.uint8)
+
+
+def make_idphoto(image_path, out_path, size_key="大一寸", bg_key="白色"):
+    """生成证件照主函数（入口签名与 Go 后端保持一致）"""
     if size_key not in SIZES:
         size_key = "一寸"
     if bg_key not in BACKGROUNDS:
         bg_key = "白色"
 
     mm_w, mm_h = SIZES[size_key]
-    tw = mm_to_px(mm_w)
-    th = mm_to_px(mm_h)
+    tw, th = mm_to_px(mm_w), mm_to_px(mm_h)
     bg_rgb = BACKGROUNDS[bg_key]
-    target_ratio = tw / th  # 目标宽高比
 
     with Image.open(image_path) as pil:
         pil = ImageOps.exif_transpose(pil)
         pil = pil.convert("RGB")
-        pil = ImageEnhance.Contrast(pil).enhance(1.05)
-        pil = ImageEnhance.Brightness(pil).enhance(1.02)
+        max_dim = 2000
+        if pil.width > max_dim or pil.height > max_dim:
+            s = max_dim / max(pil.width, pil.height)
+            pil = pil.resize((int(pil.width * s), int(pil.height * s)), Image.LANCZOS)
 
-        # 工作尺寸：限制最大边 1200px，保持比例
-        work_w = min(1200, pil.width)
-        work_h = int(pil.height * work_w / pil.width)
-        pil_work = pil.resize((work_w, work_h), Image.LANCZOS)
+    # 1. 人像抠图
+    rgba = remove_background(pil)
+    rgba = rgba.crop((0, 0, pil.width, pil.height))
+    rgba_np = np.array(rgba)  # HxWx4 (R,G,B,A)
+    bgra = np.concatenate([rgba_np[:, :, 2:3], rgba_np[:, :, 1:2], rgba_np[:, :, 0:1], rgba_np[:, :, 3:4]], axis=2)
 
-    # 使用 rembg 去除背景
-    rgba = remove_background(pil_work)
+    # 2. MTCNN 人脸检测（对原图 RGB 转 BGR 进行）
+    origin_bgr = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+    face_rect = detect_face(origin_bgr)
+    if face_rect is None:
+        return {"error": "未检测到清晰人脸，请换一张正面照重试"}
 
-    # 人脸检测
-    face_info = detect_face(pil_work)
+    # 3-4. 裁剪与修正
+    standard_size = (th, tw)
+    result_bgra = adjust_photo(bgra, face_rect, standard_size)
 
-    # 智能裁剪到目标比例
-    crop, _ = smart_crop(rgba, face_info, target_ratio)
+    # 5. 先缩放到标准尺寸（保持 4 通道，与原版管线一致）
+    result_std_bgra = standard_photo_resize(result_bgra, standard_size)
 
-    # 缩放并合成到纯色背景
-    result = resize_and_composite(crop, tw, th, bg_rgb)
-
-    # 保存，写入 DPI 元数据
+    # 6. 渲染背景
+    out_img_bgr = add_background(result_std_bgra, bg_rgb)
+    out_img = Image.fromarray(cv2.cvtColor(out_img_bgr, cv2.COLOR_BGR2RGB))
     ext = os.path.splitext(out_path)[1].lower()
     if ext in (".jpg", ".jpeg"):
-        result.save(out_path, "JPEG", quality=95, dpi=(DPI, DPI))
+        out_img.save(out_path, "JPEG", quality=95, dpi=(DPI, DPI))
     else:
-        # PNG 默认
-        result.save(out_path, "PNG", dpi=(DPI, DPI))
+        out_img.save(out_path, dpi=(DPI, DPI))
 
-    return {
-        "size": size_key,
-        "bg": bg_key,
-        "w": tw,
-        "h": th,
-        "mm_w": mm_w,
-        "mm_h": mm_h,
-        "dpi": DPI,
-    }
+    return {"size": size_key, "bg": bg_key, "w": tw, "h": th, "mm_w": mm_w, "mm_h": mm_h, "dpi": DPI}
 
 
 if __name__ == "__main__":

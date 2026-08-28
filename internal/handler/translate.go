@@ -37,6 +37,10 @@ func (h *TranslateH) writeJSON(w http.ResponseWriter, status int, v interface{})
 
 // HandleTranslate: POST /api/translate
 func (h *TranslateH) HandleTranslate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{"success": false, "error": "仅支持POST请求"})
+		return
+	}
 	var req struct {
 		Text   string `json:"text"`
 		Source string `json:"source"`
@@ -77,6 +81,10 @@ func (h *TranslateH) HandleTranslate(w http.ResponseWriter, r *http.Request) {
 
 // HandleTranslateFile: POST /api/translate/file
 func (h *TranslateH) HandleTranslateFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{"success": false, "error": "仅支持POST请求"})
+		return
+	}
 	if err := r.ParseMultipartForm(h.Cfg.MaxSize + 1<<20); err != nil {
 		h.writeJSON(w, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "文件过大或参数错误"})
 		return
@@ -138,7 +146,11 @@ func (h *TranslateH) HandleTranslateFile(w http.ResponseWriter, r *http.Request)
 	}
 	outExt := strings.TrimPrefix(filepath.Ext(output), ".")
 	outName := strings.TrimSuffix(header.Filename, filepath.Ext(header.Filename)) + "_翻译." + outExt
-	dl := h.Store.Register(output, outName)
+	dl, regErr := h.Store.Register(output, outName)
+	if regErr != nil {
+		h.writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"success": false, "error": "服务器错误"})
+		return
+	}
 	h.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":       true,
 		"download_url":  dl,

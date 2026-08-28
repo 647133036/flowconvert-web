@@ -67,30 +67,41 @@ func MakeEditedImage(tmpDir, srcPath, prompt string, width, height int) (string,
 		return "", fmt.Errorf("解码失败: %v", err)
 	}
 	b := src.Bounds()
-	w, h := b.Dx(), b.Dy()
+	srcW, srcH := b.Dx(), b.Dy()
+	dstW, dstH := srcW, srcH
 	if width > 0 {
-		w = width
+		dstW = width
 	}
 	if height > 0 {
-		h = height
+		dstH = height
 	}
-	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := b.Min.Y; y < b.Max.Y; y++ {
-		for x := b.Min.X; x < b.Max.X; x++ {
-			dst.Set(x-b.Min.X, y-b.Min.Y, src.At(x, y))
+	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+	scaleX := float64(srcW) / float64(dstW)
+	scaleY := float64(srcH) / float64(dstH)
+	for y := 0; y < dstH; y++ {
+		for x := 0; x < dstW; x++ {
+			sx := int(float64(x) * scaleX)
+			if sx >= srcW {
+				sx = srcW - 1
+			}
+			sy := int(float64(y) * scaleY)
+			if sy >= srcH {
+				sy = srcH - 1
+			}
+			dst.Set(x, y, src.At(b.Min.X+sx, b.Min.Y+sy))
 		}
 	}
 	seed := hashToSeed(prompt + "_edit")
 	rng := rand.New(rand.NewSource(int64(seed)))
 	switch rng.Intn(4) {
 	case 0:
-		applySepia(dst, w, h)
+		applySepia(dst, dstW, dstH)
 	case 1:
-		applyInvert(dst, w, h)
+		applyInvert(dst, dstW, dstH)
 	case 2:
-		applyBlur(dst, w, h, rng)
+		applyBlur(dst, dstW, dstH, rng)
 	case 3:
-		applyPosterize(dst, w, h, rng)
+		applyPosterize(dst, dstW, dstH, rng)
 	}
 	out := filepath.Join(tmpDir, "edited.png")
 	var buf bytes.Buffer
@@ -479,4 +490,135 @@ func clampVal(v float64) float64 {
 		return 255
 	}
 	return v
+}
+
+// ── AI-powered image generation ──
+
+// sizeToTier converts pixel dimensions to Agnes size tier string.
+func sizeToTier(w, h int) string {
+	max := w
+	if h > max {
+		max = h
+	}
+	switch {
+	case max <= 1024:
+		return "1K"
+	case max <= 2048:
+		return "2K"
+	case max <= 3072:
+		return "3K"
+	default:
+		return "4K"
+	}
+}
+
+// ratioFromDims computes an aspect ratio string from width and height.
+func ratioFromDims(w, h int) string {
+	g := gcd(w, h)
+	if g == 0 {
+		return "1:1"
+	}
+	return fmt.Sprintf("%d:%d", w/g, h/g)
+}
+
+func gcd(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+// MakeImageAI generates an image via AI API with Agnes fallback to SenseNova.
+func MakeImageAI(client *AIClient, tmpDir, prompt string, width, height int) (string, error) {
+	if width <= 0 {
+		width = 1024
+	}
+	if height <= 0 {
+		height = 1024
+	}
+	dest := filepath.Join(tmpDir, "generated.png")
+	size := sizeToTier(width, height)
+	ratio := ratioFromDims(width, height)
+
+	if client.HasAgnes() {
+		imgURL, b64, err := client.GenImageAgnes("agnes-image-2.1-flash", prompt, size, ratio, nil)
+		if err == nil {
+			if dErr := client.DownloadImage(imgURL, b64, dest); dErr == nil {
+				return dest, nil
+			}
+		}
+	}
+	if client.HasSenseNova() {
+		imgURL, b64, err := client.GenImageSenseNova("sensenova-u1.5-lite", prompt, size, ratio, nil)
+		if err == nil {
+			if dErr := client.DownloadImage(imgURL, b64, dest); dErr == nil {
+				return dest, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("AI图片生成不可用")
+}
+
+// MakeEditedImageAI edits an image via AI API (image-to-image).
+func MakeEditedImageAI(client *AIClient, tmpDir, srcPath, prompt string, width, height int) (string, error) {
+	dest := filepath.Join(tmpDir, "edited.png")
+	size := sizeToTier(width, height)
+	ratio := ratioFromDims(width, height)
+
+	dataURI, err := FileToDataURI(srcPath)
+	if err != nil {
+		return "", fmt.Errorf("读取源图片失败: %v", err)
+	}
+
+	if client.HasAgnes() {
+		imgURL, b64, err := client.GenImageAgnes("agnes-image-2.1-flash", prompt, size, ratio, []string{dataURI})
+		if err == nil {
+			if dErr := client.DownloadImage(imgURL, b64, dest); dErr == nil {
+				return dest, nil
+			}
+		}
+	}
+	if client.HasSenseNova() {
+		imgURL, b64, err := client.GenImageSenseNova("sensenova-u1.5-lite", prompt, size, ratio, []string{dataURI})
+		if err == nil {
+			if dErr := client.DownloadImage(imgURL, b64, dest); dErr == nil {
+				return dest, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("AI图片编辑不可用")
+}
+
+// MakeComposeImageAI composes multiple reference images via AI API.
+func MakeComposeImageAI(client *AIClient, tmpDir, prompt string, refPaths []string, width, height int) (string, error) {
+	dest := filepath.Join(tmpDir, "composed.png")
+	size := sizeToTier(width, height)
+	ratio := ratioFromDims(width, height)
+
+	var dataURIs []string
+	for _, p := range refPaths {
+		uri, err := FileToDataURI(p)
+		if err != nil {
+			continue
+		}
+		dataURIs = append(dataURIs, uri)
+	}
+
+	if client.HasAgnes() {
+		imgURL, b64, err := client.GenImageAgnes("agnes-image-2.1-flash", prompt, size, ratio, dataURIs)
+		if err == nil {
+			if dErr := client.DownloadImage(imgURL, b64, dest); dErr == nil {
+				return dest, nil
+			}
+		}
+	}
+	if client.HasSenseNova() {
+		imgURL, b64, err := client.GenImageSenseNova("sensenova-u1.5-lite", prompt, size, ratio, dataURIs)
+		if err == nil {
+			if dErr := client.DownloadImage(imgURL, b64, dest); dErr == nil {
+				return dest, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("AI图片合成不可用")
 }
