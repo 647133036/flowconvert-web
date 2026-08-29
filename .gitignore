@@ -17,6 +17,9 @@ test_idphoto.png
 test_fullbody*.png
 test_halfbody*.png
 web/test_*.png
+internal/handler/*_generated.png
+internal/handler/*_edited.png
+internal/handler/*_composed.png
 
 # Python cache
 scripts/__pycache__/

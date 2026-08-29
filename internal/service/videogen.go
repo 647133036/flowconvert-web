@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -21,6 +22,17 @@ type VideoParams struct {
 }
 
 // MakeTextVideo creates a video from text prompt via Python backend.
+// marshalVideoPayload serializes video generation parameters to JSON for the
+// Python scripts. json.Marshal guarantees valid, escaped JSON even when the
+// prompt contains quotes, newlines, control characters, or non-ASCII text.
+func marshalVideoPayload(fields map[string]interface{}) ([]byte, error) {
+	payload, err := json.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("参数序列化失败: %v", err)
+	}
+	return payload, nil
+}
+
 func MakeTextVideo(tmpDir, prompt string, duration int) (string, error) {
 	if duration <= 0 {
 		duration = 3
@@ -30,8 +42,11 @@ func MakeTextVideo(tmpDir, prompt string, duration int) (string, error) {
 	}
 	dest := filepath.Join(tmpDir, "video.mp4")
 	payloadPath := filepath.Join(tmpDir, "video_payload.json")
-	payload := fmt.Sprintf(`{"prompt": %q, "duration": %d}`, prompt, duration)
-	if err := os.WriteFile(payloadPath, []byte(payload), 0o600); err != nil {
+	payload, err := marshalVideoPayload(map[string]interface{}{"prompt": prompt, "duration": duration})
+	if err != nil {
+		return "", fmt.Errorf("参数序列化失败: %v", err)
+	}
+	if err := os.WriteFile(payloadPath, payload, 0o600); err != nil {
 		return "", fmt.Errorf("保存参数失败: %v", err)
 	}
 	defer os.Remove(payloadPath)
@@ -53,8 +68,16 @@ func MakeKeyframeVideo(tmpDir, firstFrame, lastFrame, prompt string, duration in
 	}
 	dest := filepath.Join(tmpDir, "keyframe_video.mp4")
 	payloadPath := filepath.Join(tmpDir, "kf_payload.json")
-	payload := fmt.Sprintf(`{"first": %q, "last": %q, "prompt": %q, "duration": %d}`, firstFrame, lastFrame, prompt, duration)
-	if err := os.WriteFile(payloadPath, []byte(payload), 0o600); err != nil {
+	payload, err := marshalVideoPayload(map[string]interface{}{
+		"first":    firstFrame,
+		"last":     lastFrame,
+		"prompt":   prompt,
+		"duration": duration,
+	})
+	if err != nil {
+		return "", fmt.Errorf("参数序列化失败: %v", err)
+	}
+	if err := os.WriteFile(payloadPath, payload, 0o600); err != nil {
 		return "", fmt.Errorf("保存参数失败: %v", err)
 	}
 	defer os.Remove(payloadPath)
@@ -77,17 +100,15 @@ func MakeRefVideo(tmpDir, prompt string, refPaths []string, duration int) (strin
 	dest := filepath.Join(tmpDir, "ref_video.mp4")
 	payloadPath := filepath.Join(tmpDir, "ref_payload.json")
 
-	refsJSON := "["
-	for i, p := range refPaths {
-		if i > 0 {
-			refsJSON += ", "
-		}
-		refsJSON += fmt.Sprintf("%q", p)
+	payload, err := marshalVideoPayload(map[string]interface{}{
+		"prompt":   prompt,
+		"refs":     refPaths,
+		"duration": duration,
+	})
+	if err != nil {
+		return "", fmt.Errorf("参数序列化失败: %v", err)
 	}
-	refsJSON += "]"
-
-	payload := fmt.Sprintf(`{"prompt": %q, "refs": %s, "duration": %d}`, prompt, refsJSON, duration)
-	if err := os.WriteFile(payloadPath, []byte(payload), 0o600); err != nil {
+	if err := os.WriteFile(payloadPath, payload, 0o600); err != nil {
 		return "", fmt.Errorf("保存参数失败: %v", err)
 	}
 	defer os.Remove(payloadPath)
@@ -188,7 +209,9 @@ func segmentStagePrompt(prompt string, i, n int) string {
 // concatVideos merges multiple MP4 segments using ffmpeg concat demuxer.
 // probeResolution returns width,height from a video file using ffprobe.
 func probeResolution(path string) (int, int, error) {
-	out, err := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0",
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0",
 		"-show_entries", "stream=width,height", "-of", "json", path).CombinedOutput()
 	if err != nil {
 		return 0, 0, err

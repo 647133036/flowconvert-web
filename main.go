@@ -52,6 +52,7 @@ func main() {
 	// Apply middleware
 	handler := CORS(mux)
 	handler = RateLimit(handler, 100)
+	handler = BodyLimit(handler)
 
 	addr := ":" + cfg.Port
 	log.Printf("FlowConvert 启动于 http://0.0.0.0%s", addr)

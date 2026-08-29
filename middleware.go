@@ -28,6 +28,23 @@ func CORS(next http.Handler) http.Handler {
 	})
 }
 
+// maxAPIBody caps the total size of API request bodies. It covers the
+// largest legitimate upload (50MB file + multipart field overhead) while
+// preventing oversized bodies from being buffered to disk by
+// ParseMultipartForm (whose maxMemory argument does not cap total size).
+const maxAPIBody = 64 << 20
+
+// BodyLimit wraps API request bodies with http.MaxBytesReader so oversized
+// requests are rejected before any handler buffers them.
+func BodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxAPIBody)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 type ipBucket struct {
 	count     int
 	windowEnd time.Time

@@ -2,7 +2,7 @@
 
 [![Go Version](https://img.shields.io/badge/go-1.25-blue.svg)](https://golang.org/)
 [![License](https://img.shields.io/badge/license-Apache--3.0-green.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.1.1-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/version-v0.1.2-brightgreen.svg)](#)
 
 一个基于 Go 的轻量级文档与媒体转换服务，支持图片转矢量、PDF 转 Office、证件照制作、多语言翻译以及 AI 视频/图像生成。**内置 OCR 引擎，支持扫描版/照片式 PDF 的文字识别。**
 
@@ -257,6 +257,17 @@ LOG_LEVEL=debug go run .
 ```
 
 ## 版本历史
+
+- **v0.1.2** (2026-08) 代码审查修复
+  - 视频生成参数：JSON 序列化改用 json.Marshal，杜绝引号/换行/控制字符导致的 payload 注入
+  - 视频时长上限：60s → 120s，与前端滑杆一致（AI 路径自动分段）
+  - API 请求体：新增 64MB BodyLimit，防止超大请求体缓冲耗尽磁盘
+  - ffprobe 探测：增加 30 秒超时，避免挂起
+  - ffmpeg 编码：增加 300 秒超时，超时返回明确错误
+  - 中文字体探测：os.popen 改为 subprocess.run（超时 5 秒）
+  - 会话 TTL：1 小时 → 2 小时
+  - 前端链接安全：补全 rel=noopener noreferrer
+  - 新增单元测试：payload JSON 序列化（引号/换行/控制字符/unicode 回环）、BodyLimit 中间件
 
 - **v0.1.1** (2026-08) 安全加固与并发控制
   - 限流器：bucket 上限 10000，自动清理过期条目，XFF 信任逻辑修复

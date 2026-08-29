@@ -33,7 +33,7 @@ func Load() *Config {
 		OutDir:        filepath.Join(dataDir, "output"),
 		MaxSize:       50 << 20,
 		MaxURL:        20 << 20,
-		TTLHours:      1,
+		TTLHours:      2,
 		AgnesAPIKey:   env("AGNES_API_KEY", ""),
 		AgnesBaseURL:  env("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1"),
 		SenseNovaKey:  env("SENSENOVA_API_KEY", ""),

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -147,6 +149,49 @@ func TestClientIP(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBodyLimitMiddleware(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := BodyLimit(inner)
+
+	t.Run("allows_small_api_body", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/test", strings.NewReader("hello"))
+		req.RemoteAddr = "1.2.3.4:1234"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", w.Code)
+		}
+	})
+
+	t.Run("rejects_oversized_api_body", func(t *testing.T) {
+		// 64MB limit + 1 byte should be rejected before the handler reads it.
+		req := httptest.NewRequest("POST", "/api/test", strings.NewReader(strings.Repeat("a", maxAPIBody+1)))
+		req.RemoteAddr = "1.2.3.4:1234"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("expected 413, got %d", w.Code)
+		}
+	})
+
+	t.Run("skips_non_api_paths", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/index.html", nil)
+		req.RemoteAddr = "1.2.3.4:1234"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", w.Code)
+		}
+	})
 }
 
 func TestRateLimitWindowReset(t *testing.T) {

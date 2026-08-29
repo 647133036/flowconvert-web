@@ -282,7 +282,10 @@ def encode_video(frame_dir, dest, total_frames):
         "-movflags", "+faststart",
         dest,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("ffmpeg 编码超时（300秒）")
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg 编码失败: {result.stderr[-500:]}")
     if not os.path.exists(dest):

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -221,6 +223,66 @@ func TestSegmentStagePromptCyclesClauses(t *testing.T) {
 		p := segmentStagePrompt(prompt, i, n)
 		if p == "" {
 			t.Errorf("segment %d should not be empty", i)
+		}
+	}
+}
+
+func TestMarshalVideoPayloadTrickyPrompts(t *testing.T) {
+	tricky := []string{
+		`quote " inside`,
+		`backslash \ inside`,
+		"newline \n inside",
+		"tab \t inside",
+		"carriage \r return",
+		"unicode 中文 text",
+		"line separator \u2028 and paragraph separator \u2029",
+		"control \x00 \x01 \x1f chars",
+		"``double backticks`` and 'single quotes'",
+		strings.Repeat("a", 2000),
+		"",
+	}
+	for _, p := range tricky {
+		payload, err := marshalVideoPayload(map[string]interface{}{"prompt": p, "duration": 8})
+		if err != nil {
+			t.Fatalf("marshal failed for %q: %v", p, err)
+		}
+		if !json.Valid(payload) {
+			t.Fatalf("payload is not valid JSON for %q: %s", p, payload)
+		}
+		var back map[string]interface{}
+		if err := json.Unmarshal(payload, &back); err != nil {
+			t.Fatalf("round-trip failed for %q: %v", p, err)
+		}
+		if back["prompt"] != p {
+			t.Errorf("round-trip mismatch for %q: got %q", p, back["prompt"])
+		}
+	}
+}
+
+func TestMarshalVideoPayloadRefsArray(t *testing.T) {
+	refs := []string{"/tmp/a b/photo 1.png", "/tmp/中文/图\"2\".png"}
+	payload, err := marshalVideoPayload(map[string]interface{}{
+		"prompt":   `prompt with "quotes"`,
+		"refs":     refs,
+		"duration": 12,
+	})
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	if !json.Valid(payload) {
+		t.Fatalf("payload is not valid JSON: %s", payload)
+	}
+	var back map[string]interface{}
+	if err := json.Unmarshal(payload, &back); err != nil {
+		t.Fatalf("round-trip failed: %v", err)
+	}
+	gotRefs, ok := back["refs"].([]interface{})
+	if !ok || len(gotRefs) != len(refs) {
+		t.Fatalf("refs round-trip mismatch: %v", back["refs"])
+	}
+	for i, r := range gotRefs {
+		if r.(string) != refs[i] {
+			t.Errorf("refs[%d] = %q, want %q", i, r.(string), refs[i])
 		}
 	}
 }

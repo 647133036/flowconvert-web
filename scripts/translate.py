@@ -295,7 +295,11 @@ def find_cjk_font():
         if os.path.exists(p):
             return p
     try:
-        out = os.popen("fc-list :lang=zh file 2>/dev/null | head -1").read().split(":")[0].strip()
+        import subprocess
+        out = subprocess.run(
+            ["fc-list", ":lang=zh", "file"],
+            capture_output=True, text=True, timeout=5
+        ).stdout.split("\n")[0].split(":")[0].strip()
         if out and os.path.exists(out):
             return out
     except Exception:

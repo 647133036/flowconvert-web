@@ -63,8 +63,8 @@ func (h *VideoGenH) HandleTextVideo(w http.ResponseWriter, r *http.Request) {
 	if duration <= 0 {
 		duration = 5
 	}
-	if duration > 60 {
-		duration = 60
+	if duration > 120 {
+		duration = 120
 	}
 	aspectRatio := validAspectRatio(strings.TrimSpace(r.FormValue("aspect_ratio")))
 
@@ -163,8 +163,8 @@ func (h *VideoGenH) HandleKeyframeVideo(w http.ResponseWriter, r *http.Request) 
 	if duration <= 0 {
 		duration = 5
 	}
-	if duration > 60 {
-		duration = 60
+	if duration > 120 {
+		duration = 120
 	}
 	aspectRatio := validAspectRatio(strings.TrimSpace(r.FormValue("aspect_ratio")))
 
@@ -284,8 +284,8 @@ func (h *VideoGenH) HandleRefVideo(w http.ResponseWriter, r *http.Request) {
 	if duration <= 0 {
 		duration = 5
 	}
-	if duration > 60 {
-		duration = 60
+	if duration > 120 {
+		duration = 120
 	}
 	aspectRatio := validAspectRatio(strings.TrimSpace(r.FormValue("aspect_ratio")))
 
