@@ -1,4 +1,4 @@
-use crate::util::{run_cmd, python_path, script_path, safe_ext};
+use crate::util::{python_path, script_path, safe_ext};
 use std::path::PathBuf;
 use std::time::Duration;
 

@@ -1,15 +1,12 @@
-use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 
 use futures_util::stream::StreamExt;
 use reqwest::Client;
 
-use super::aiclient::{validate_download_url, AIClient};
-use crate::util::{new_id, script_path, python_path};
+use super::aiclient::validate_download_url;
+use crate::util::new_id;
 
-const MAX_FETCH_BYTES: i64 = 20 * 1024 * 1024;
 
 /// Check if an IpAddr is a safe public address (not loopback, private, link-local, or unspecified).
 fn is_safe_public_ip(ip: IpAddr) -> bool {

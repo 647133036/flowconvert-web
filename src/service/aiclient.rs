@@ -4,7 +4,7 @@ use std::sync::Mutex;
 
 use futures_util::stream::StreamExt;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::store::VideoJobStore;
@@ -30,6 +30,7 @@ pub struct AIClient {
     pub sense_key: String,
     pub http: Client,
     rate_limiter: Mutex<RateLimiterState>,
+    #[allow(dead_code)]
     job_store: Option<std::sync::Arc<VideoJobStore>>,
 }
 
@@ -252,7 +253,7 @@ impl AIClient {
         }
 
         let max_retries = 10;
-        let mut last_err: Option<String> = None;
+        let mut _last_err: Option<String> = None;
         let mut resp_result: Result<Vec<u8>, String> = Err("no attempt made".to_string());
 
         for attempt in 0..max_retries {
@@ -280,7 +281,7 @@ impl AIClient {
                 std::thread::sleep(backoff);
                 continue;
             }
-            last_err = Some(resp_result.as_ref().unwrap_err().clone());
+            _last_err = Some(resp_result.as_ref().unwrap_err().clone());
             break;
         }
 
@@ -351,6 +352,7 @@ impl AIClient {
             #[derive(Deserialize)]
             struct VideoResultResponse {
                 status: String,
+#[allow(dead_code)]
                 progress: i32,
                 url: String,
                 metadata: Metadata,

@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use image::{DynamicImage, GenericImage, GenericImageView, ImageBuffer, Rgba};
 
-use crate::util::new_id;
 
 /// Procedural abstract image generation using image crate.
 pub fn make_image(tmp_dir: &str, prompt: &str, width: i32, height: i32) -> Result<String, String> {
@@ -116,7 +115,7 @@ fn render_gradient(img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, w: i32, h: i32, hue
     }
 }
 
-fn render_geo(img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, w: i32, h: i32, prompt: &str, rng: &mut Fastrand, bg_hue: f64) {
+fn render_geo(img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, w: i32, h: i32, prompt: &str, _rng: &mut Fastrand, bg_hue: f64) {
     for y in 0..h {
         for x in 0..w {
             let (r, g, b) = hsl2rgb(bg_hue, 0.5, 0.1);
@@ -199,7 +198,7 @@ fn render_particle(img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, w: i32, h: i32, _pr
     }
 }
 
-fn render_mosaic(img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, w: i32, h: i32, prompt: &str, rng: &mut Fastrand, bg_hue: f64) {
+fn render_mosaic(img: &mut ImageBuffer<Rgba<u8>, Vec<u8>>, w: i32, h: i32, prompt: &str, _rng: &mut Fastrand, bg_hue: f64) {
     let seed = hash_to_seed(&format!("{}_m", prompt));
     let mut rng2 = Fastrand::new(seed);
     let ts = 18 + rng2.u32(0..50) as i32;
@@ -462,6 +461,7 @@ fn hash_to_seed(s: &str) -> u64 {
     h.finish()
 }
 
+#[allow(dead_code)]
 fn size_to_tier(w: i32, h: i32) -> String {
     let max = w.max(h);
     match max {
@@ -472,6 +472,7 @@ fn size_to_tier(w: i32, h: i32) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn ratio_from_dims(w: i32, h: i32) -> String {
     let g = gcd(w, h);
     if g == 0 {
@@ -480,6 +481,7 @@ fn ratio_from_dims(w: i32, h: i32) -> String {
     format!("{}:{}", w / g, h / g)
 }
 
+#[allow(dead_code)]
 fn gcd(a: i32, b: i32) -> i32 {
     let (mut a, mut b) = (a.abs(), b.abs());
     while b != 0 {
@@ -517,6 +519,7 @@ impl Fastrand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::new_id;
 
     #[test]
     fn test_make_image() {

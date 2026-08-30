@@ -4,9 +4,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 
-use crate::config::Config;
 use crate::service;
-use crate::store::VideoJobStore;
 use crate::util::{image_input_exts, new_id};
 use crate::AppState;
 

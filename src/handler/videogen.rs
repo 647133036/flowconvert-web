@@ -1,11 +1,10 @@
 use axum::extract::{Multipart, Path, State};
-use axum::http::{header, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
 
-use crate::config::Config;
 use crate::service;
-use crate::store::{JobStatus, VideoJob, VideoJobStore};
+use crate::store::JobStatus;
 use crate::util::new_id;
 use crate::AppState;
 
@@ -277,7 +276,7 @@ pub async fn handle_keyframe_video(
                 &sensenova_key,
                 Some(app.video_jobs.clone()),
             );
-            if let Ok(_result) = service::make_keyframe_video_ai(
+            if let Ok(video_path) = service::make_keyframe_video_ai(
                 &ai_client,
                 tmp_dir.to_str().unwrap(),
                 first_path.to_string_lossy().as_ref(),
@@ -286,7 +285,11 @@ pub async fn handle_keyframe_video(
                 duration,
                 &aspect_ratio,
             ).await {
-                app.video_jobs.set_complete(&job_id, &format!("/api/download/{}", new_id(8)));
+                if let Ok(dl_url) = app.file_store.register(&video_path, "keyframe_video.mp4") {
+                    app.video_jobs.set_complete(&job_id, &dl_url);
+                } else {
+                    app.video_jobs.set_error(&job_id, "保存视频失败");
+                }
                 app.video_jobs.release_one_slot();
                 return;
             }
@@ -451,7 +454,7 @@ pub async fn handle_ref_video(
                 &sensenova_key,
                 Some(app.video_jobs.clone()),
             );
-            if let Ok(_result) = service::make_ref_video_ai(
+            if let Ok(video_path) = service::make_ref_video_ai(
                 &ai_client,
                 tmp_dir.to_str().unwrap(),
                 &prompt,
@@ -459,7 +462,11 @@ pub async fn handle_ref_video(
                 duration,
                 &aspect_ratio,
             ).await {
-                app.video_jobs.set_complete(&job_id, &format!("/api/download/{}", new_id(8)));
+                if let Ok(dl_url) = app.file_store.register(&video_path, "ref_video.mp4") {
+                    app.video_jobs.set_complete(&job_id, &dl_url);
+                } else {
+                    app.video_jobs.set_error(&job_id, "保存视频失败");
+                }
                 app.video_jobs.release_one_slot();
                 return;
             }

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::service::aiclient::AIClient;
-use crate::util::{run_cmd, python_path, script_path};
+use crate::util::{python_path, script_path};
 
 /// Marshal video generation payload to JSON bytes.
 pub fn marshal_video_payload(fields: &serde_json::Map<String, serde_json::Value>) -> Result<Vec<u8>, String> {

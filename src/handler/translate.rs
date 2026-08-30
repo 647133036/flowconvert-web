@@ -3,12 +3,9 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
-use std::sync::Arc;
 
-use crate::config::Config;
 use crate::service;
-use crate::store::VideoJobStore;
-use crate::util::{new_id, script_path, python_path};
+use crate::util::new_id;
 use crate::AppState;
 
 #[derive(Deserialize)]
