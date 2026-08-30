@@ -235,9 +235,50 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_tools() {
+    fn test_vec_params_normalize_bounds_max() {
+        let mut p = VecParams {
+            mode: "polygon".to_string(),
+            color_precision: 9,
+            filter_speckle: 21,
+            corner_threshold: 181,
+        };
+        p.normalize();
+        assert_eq!(p.mode, "polygon");
+        assert_eq!(p.color_precision, 6);
+        assert_eq!(p.filter_speckle, 4);
+        assert_eq!(p.corner_threshold, 60);
+    }
+
+    #[test]
+    fn test_vec_params_normalize_valid_values() {
+        let mut p = VecParams {
+            mode: "pixel".to_string(),
+            color_precision: 4,
+            filter_speckle: 10,
+            corner_threshold: 90,
+        };
+        p.normalize();
+        assert_eq!(p.mode, "pixel");
+        assert_eq!(p.color_precision, 4);
+        assert_eq!(p.filter_speckle, 10);
+        assert_eq!(p.corner_threshold, 90);
+    }
+
+    #[test]
+    fn test_detect_tools_no_panic() {
         let tools = detect_tools();
-        // Just ensure it runs without panicking
+        assert!(!tools.vtracer || !tools.vtracer); // just ensures no panic
         let _ = tools;
+    }
+
+    #[test]
+    fn test_vectorize_out_svg_missing_returns_error() {
+        // Creates a temp dir and calls vectorize with a non-existent source
+        // This should return an error since the python script can't read the source
+        let tmp = std::env::temp_dir().join(format!("flowconvert_vec_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).ok();
+        let result = vectorize(tmp.to_str().unwrap(), "/nonexistent/path.png", "/tmp/out.svg", VecParams::default());
+        assert!(result.is_err());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

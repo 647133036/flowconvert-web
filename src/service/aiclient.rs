@@ -508,6 +508,13 @@ pub fn validate_download_url(raw: &str) -> Result<(), String> {
     if host.is_empty() {
         return Err("URL 缺少 host".to_string());
     }
+    // Guard against path-like hosts (e.g. "http:///path" parses host="path")
+    if host.contains('/') || host.contains('\\') || host.contains(':') {
+        return Err("URL 格式无效：host 包含非法字符".to_string());
+    }
+    if host == "localhost" {
+        return Err("禁止下载内网/回环地址资源".to_string());
+    }
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         let is_loopback = ip.is_loopback() || ip.is_unspecified();
         let is_private_or_link_local = match ip {
@@ -517,9 +524,6 @@ pub fn validate_download_url(raw: &str) -> Result<(), String> {
         if is_loopback || is_private_or_link_local {
             return Err("禁止下载内网/回环地址资源".to_string());
         }
-    }
-    if host == "localhost" {
-        return Err("禁止下载内网/回环地址资源".to_string());
     }
     Ok(())
 }
@@ -552,6 +556,7 @@ mod tests {
     fn test_validate_download_url_accepts_public() {
         assert!(validate_download_url("https://example.com/image.jpg").is_ok());
         assert!(validate_download_url("http://cdn.example.com/v.mp4").is_ok());
+        assert!(validate_download_url("https://images.unsplash.com/photo.jpg").is_ok());
     }
 
     #[test]
@@ -560,20 +565,47 @@ mod tests {
         assert!(validate_download_url("http://192.168.1.1/image.jpg").is_err());
         assert!(validate_download_url("http://localhost/image.jpg").is_err());
         assert!(validate_download_url("http://10.0.0.1/image.jpg").is_err());
+        // 172.16-31.x range
+        assert!(validate_download_url("http://172.16.0.1/image.jpg").is_err());
+        assert!(validate_download_url("http://172.31.255.255/image.jpg").is_err());
+        assert!(validate_download_url("http://172.15.0.1/image.jpg").is_ok()); // not in private range
+        // ::1 IPv6 loopback
+        assert!(validate_download_url("http://::1/image.jpg").is_err());
+        // fe80:: link-local (bare format)
+        assert!(validate_download_url("http://fe80::1/image.jpg").is_err());
     }
 
     #[test]
     fn test_validate_download_url_rejects_non_http() {
         assert!(validate_download_url("ftp://example.com/file").is_err());
         assert!(validate_download_url("").is_err());
+        assert!(validate_download_url("file:///etc/passwd").is_err());
+        assert!(validate_download_url("data:text/plain;base64,SGVsbG8=").is_err());
+        assert!(validate_download_url("javascript:alert(1)").is_err());
     }
 
     #[test]
     fn test_is_transient_video_err() {
+        // DiffGenerator branch
         assert!(is_transient_video_err("DiffGenerator returned no result"));
         assert!(is_transient_video_err("some error DiffGenerator returned no result here"));
-        assert!(is_transient_video_err("rate limit exceeded"));
+        // no result branch
+        assert!(is_transient_video_err("no result found"));
+        assert!(is_transient_video_err("task failed with no result"));
+        // 429 branch
+        assert!(is_transient_video_err("429 Too Many Requests"));
+        // rate_limit branch
+        assert!(is_transient_video_err("error: rate_limit exceeded"));
+        // rate limit branch (space)
+        assert!(is_transient_video_err("API rate limit hit"));
+        // 503 branch
+        assert!(is_transient_video_err("503 Service Unavailable"));
+        // queue_full branch
+        assert!(is_transient_video_err("video_queue_full, retry later"));
+        // Non-transient
         assert!(!is_transient_video_err("permanent failure"));
         assert!(!is_transient_video_err("500 internal error"));
+        assert!(!is_transient_video_err("invalid API key"));
+        assert!(!is_transient_video_err("model not found"));
     }
 }

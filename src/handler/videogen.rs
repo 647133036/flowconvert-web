@@ -96,14 +96,18 @@ pub async fn handle_text_video(
                 &sensenova_key,
                 Some(app.video_jobs.clone()),
             );
-            if let Ok(_result) = service::make_text_video_ai(
+            if let Ok(video_path) = service::make_text_video_ai(
                 &ai_client,
                 tmp_dir.to_str().unwrap(),
                 &prompt,
                 duration,
                 &aspect_ratio,
             ).await {
-                app.video_jobs.set_complete(&job_id, &format!("/api/download/{}", new_id(8)));
+                if let Ok(dl_url) = app.file_store.register(&video_path, "video.mp4") {
+                    app.video_jobs.set_complete(&job_id, &dl_url);
+                } else {
+                    app.video_jobs.set_error(&job_id, "保存视频失败");
+                }
                 app.video_jobs.release_one_slot();
                 return;
             }
@@ -116,8 +120,12 @@ pub async fn handle_text_video(
         .await;
 
         match result {
-            Ok(Ok(_path)) => {
-                app.video_jobs.set_complete(&job_id, &format!("/api/download/{}", new_id(8)));
+            Ok(Ok(path)) => {
+                if let Ok(dl_url) = app.file_store.register(&path, "video.mp4") {
+                    app.video_jobs.set_complete(&job_id, &dl_url);
+                } else {
+                    app.video_jobs.set_error(&job_id, "保存视频失败");
+                }
             }
             Ok(Err(e)) => {
                 tracing::error!("视频生成失败: {}", e);
@@ -299,8 +307,12 @@ pub async fn handle_keyframe_video(
         .await;
 
         match result {
-            Ok(Ok(_path)) => {
-                app.video_jobs.set_complete(&job_id, &format!("/api/download/{}", new_id(8)));
+            Ok(Ok(path)) => {
+                if let Ok(dl_url) = app.file_store.register(&path, "keyframe_video.mp4") {
+                    app.video_jobs.set_complete(&job_id, &dl_url);
+                } else {
+                    app.video_jobs.set_error(&job_id, "保存视频失败");
+                }
             }
             Ok(Err(e)) => {
                 tracing::error!("关键帧视频生成失败: {}", e);
@@ -466,8 +478,12 @@ pub async fn handle_ref_video(
         .await;
 
         match result {
-            Ok(Ok(_path)) => {
-                app.video_jobs.set_complete(&job_id, &format!("/api/download/{}", new_id(8)));
+            Ok(Ok(path)) => {
+                if let Ok(dl_url) = app.file_store.register(&path, "ref_video.mp4") {
+                    app.video_jobs.set_complete(&job_id, &dl_url);
+                } else {
+                    app.video_jobs.set_error(&job_id, "保存视频失败");
+                }
             }
             Ok(Err(e)) => {
                 tracing::error!("参考视频生成失败: {}", e);
@@ -555,4 +571,33 @@ fn extract_ext_opt(filename: Option<&str>) -> String {
         .and_then(|f| std::path::Path::new(f).extension())
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_aspect_ratio_whitelist() {
+        for ratio in ASPECT_RATIOS {
+            assert!(ASPECT_RATIOS.contains(ratio));
+        }
+        assert!(!ASPECT_RATIOS.contains(&"3:2"));
+        assert!(!ASPECT_RATIOS.contains(&"1:2"));
+        assert!(!ASPECT_RATIOS.contains(&"invalid"));
+    }
+
+    #[test]
+    fn test_extract_ext() {
+        assert_eq!(extract_ext(&Some("image.png".to_string())), "png");
+        assert_eq!(extract_ext(&Some("photo.JPEG".to_string())), "jpeg");
+        assert_eq!(extract_ext(&None), "");
+        assert_eq!(extract_ext(&Some("noext".to_string())), "");
+    }
+
+    #[test]
+    fn test_extract_ext_opt() {
+        assert_eq!(extract_ext_opt(Some("image.svg")), "svg");
+        assert_eq!(extract_ext_opt(None), "");
+    }
 }

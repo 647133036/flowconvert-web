@@ -1,12 +1,10 @@
-use axum::extract::{Form, Multipart, Query, State};
+use axum::extract::{Multipart, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 
-use crate::config::Config;
 use crate::service;
-use crate::store::VideoJobStore;
 use crate::util::{image_input_exts, new_id};
 use crate::AppState;
 
@@ -189,9 +187,21 @@ pub async fn handle_upload_vectorize(
         }
     };
 
+    let fname_for_store = format!("converted.{}", output);
+    let dl_url = match app.file_store.register(&result, &fname_for_store) {
+        Ok(url) => url,
+        Err(e) => {
+            tracing::error!("保存矢量化文件失败: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "success": false,
+                "error": "保存文件失败"
+            }))).into_response();
+        }
+    };
+
     (StatusCode::OK, Json(serde_json::json!({
         "success": true,
-        "download_url": format!("/api/download/{}", new_id(8)),
+        "download_url": dl_url,
         "format": output,
     }))).into_response()
 }
@@ -670,5 +680,43 @@ mod tests {
         assert!(valid_prompt(&long).is_err());
         let exact = "a".repeat(MAX_PROMPT_LEN);
         assert!(valid_prompt(&exact).is_ok());
+    }
+
+    #[test]
+    fn test_is_valid_image_magic_png() {
+        let data = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        assert!(is_valid_image_magic(data));
+    }
+
+    #[test]
+    fn test_is_valid_image_magic_jpg() {
+        let data = &[0xFF, 0xD8, 0xFF, 0xE0];
+        assert!(is_valid_image_magic(data));
+    }
+
+    #[test]
+    fn test_is_valid_image_magic_gif() {
+        let data = &[0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
+        assert!(is_valid_image_magic(data));
+    }
+
+    #[test]
+    fn test_is_valid_image_magic_webp() {
+        let data = &[0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, b'W', b'E', b'B', b'P'];
+        assert!(is_valid_image_magic(data));
+    }
+
+    #[test]
+    fn test_is_valid_image_magic_bmp() {
+        let data = &[0x42, 0x4D, 0x00, 0x00];
+        assert!(is_valid_image_magic(data));
+    }
+
+    #[test]
+    fn test_is_valid_image_magic_rejects_non_image() {
+        assert!(!is_valid_image_magic(b"not an image"));
+        assert!(!is_valid_image_magic(b""));
+        assert!(!is_valid_image_magic(&[0x00, 0x00, 0x00]));
+        assert!(!is_valid_image_magic(&[0xEF, 0xBB, 0xBF])); // UTF-8 BOM
     }
 }

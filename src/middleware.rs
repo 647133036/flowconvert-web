@@ -26,7 +26,7 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
         ("X-XSS-Protection", "1; mode=block"),
         (
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'",
+            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'",
         ),
         ("Access-Control-Allow-Origin", "*"),
         ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
@@ -164,6 +164,149 @@ pub fn client_ip(req: &Request) -> String {
         }
     }
     host
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderValue, Request};
+    use std::net::{IpAddr, SocketAddr};
+
+    fn make_request(peer_ip: &str, xff: Option<&str>, x_real_ip: Option<&str>) -> Request<axum::body::Body> {
+        let mut req = Request::builder()
+            .uri("/api/test")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(SocketAddr::from((
+            peer_ip.parse::<IpAddr>().unwrap(),
+            12345,
+        ))));
+        if let Some(v) = xff {
+            req.headers_mut().insert("x-forwarded-for", v.parse().unwrap());
+        }
+        if let Some(v) = x_real_ip {
+            req.headers_mut().insert("x-real-ip", v.parse().unwrap());
+        }
+        req
+    }
+
+    #[test]
+    fn rate_limiter_allows_within_window() {
+        let limiter = RateLimiter::new(100);
+        for _ in 0..100 {
+            assert_eq!(limiter.check("1.2.3.4"), RateDecision::Allow);
+        }
+    }
+
+    #[test]
+    fn rate_limiter_rejects_over_limit() {
+        let limiter = RateLimiter::new(100);
+        for _ in 0..100 {
+            let _ = limiter.check("1.2.3.4");
+        }
+        assert_eq!(limiter.check("1.2.3.4"), RateDecision::TooManyRequests);
+    }
+
+    #[test]
+    fn rate_limiter_max_buckets_returns_busy() {
+        let limiter = RateLimiter::new(10);
+        // Fill up all buckets
+        for i in 0..MAX_BUCKETS {
+            let ip = format!("1.{}.{}.{}", (i >> 16) & 0xff, (i >> 8) & 0xff, i & 0xff);
+            let _ = limiter.check(&ip);
+        }
+        // Next distinct IP should hit busy
+        let overflow_ip = format!("255.255.255.255");
+        assert_eq!(limiter.check(&overflow_ip), RateDecision::Busy);
+    }
+
+    #[test]
+    fn client_ip_direct_connection() {
+        let req = make_request("203.0.113.5", None, None);
+        assert_eq!(client_ip(&req), "203.0.113.5");
+    }
+
+    #[test]
+    fn client_ip_xff_uses_public_ip() {
+        let req = make_request("127.0.0.1", Some("198.51.100.10, 10.0.0.1"), None);
+        // 127.0.0.1 is loopback, so XFF is consulted; 198.51.100.10 is public
+        assert_eq!(client_ip(&req), "198.51.100.10");
+    }
+
+    #[test]
+    fn client_ip_xff_skips_private_ips() {
+        let req = make_request("127.0.0.1", Some("192.168.1.1, 203.0.113.5"), None);
+        // 192.168.x is private, so skip to next which is 203.0.113.5
+        assert_eq!(client_ip(&req), "203.0.113.5");
+    }
+
+    #[test]
+    fn client_ip_xff_all_private_falls_back_to_host() {
+        let req = make_request("127.0.0.1", Some("192.168.1.1, 10.0.0.1"), None);
+        assert_eq!(client_ip(&req), "127.0.0.1");
+    }
+
+    #[test]
+    fn client_ip_ipv6_loopback() {
+        let req = make_request("::1", None, None);
+        assert_eq!(client_ip(&req), "::1");
+    }
+
+    #[test]
+    fn client_ip_ipv6_ula_falls_back_to_xff() {
+        let req = make_request("fc00::1", Some("2001:db8::1"), None);
+        assert_eq!(client_ip(&req), "2001:db8::1");
+    }
+
+    #[tokio::test]
+    async fn security_headers_options_returns_200_with_cors() {
+        use axum::{routing::get, Router};
+        use tower::ServiceExt;
+
+        async fn dummy_handler() -> &'static str { "ok" }
+        let app = Router::new()
+            .route("/test", get(dummy_handler))
+            .layer(axum::middleware::from_fn(security_headers));
+
+        let req = Request::builder()
+            .method("OPTIONS")
+            .uri("/test")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), 200);
+        let headers = res.headers();
+        assert_eq!(headers.get("Access-Control-Allow-Origin").unwrap(), "*");
+        assert_eq!(headers.get("Access-Control-Allow-Methods").unwrap(), "GET, POST, OPTIONS");
+        assert_eq!(headers.get("X-Content-Type-Options").unwrap(), "nosniff");
+        assert_eq!(headers.get("X-Frame-Options").unwrap(), "DENY");
+    }
+
+    #[tokio::test]
+    async fn security_headers_normal_request_contains_security_headers() {
+        use axum::{routing::get, Router};
+        use tower::ServiceExt;
+
+        async fn dummy_handler() -> &'static str { "ok" }
+        let app = Router::new()
+            .route("/test", get(dummy_handler))
+            .layer(axum::middleware::from_fn(security_headers));
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/test")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), 200);
+        let headers = res.headers();
+        assert_eq!(headers.get("X-Content-Type-Options").unwrap(), "nosniff");
+        assert_eq!(headers.get("X-Frame-Options").unwrap(), "DENY");
+        assert_eq!(headers.get("X-XSS-Protection").unwrap(), "1; mode=block");
+        let csp = headers.get("Content-Security-Policy").unwrap().to_str().unwrap();
+        assert!(csp.contains("script-src 'self'"));
+        assert!(!csp.contains("'unsafe-inline'"));
+    }
 }
 
 /// Mirrors Go's IsPrivate for IpAddr: RFC1918 for IPv4, ULA for IPv6.

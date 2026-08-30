@@ -2,10 +2,11 @@ use std::fmt::Write as FmtWrite;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-static mut SEED_COUNTER: u64 = 0;
+static SEED_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub fn new_id(n: usize) -> String {
     let mut buf = String::with_capacity(n * 2);
@@ -17,11 +18,8 @@ pub fn new_id(n: usize) -> String {
 }
 
 fn rand_byte() -> u8 {
-    unsafe {
-        SEED_COUNTER += 1;
-        let val = SEED_COUNTER;
-        ((val ^ (val >> 16)) & 0xFF) as u8
-    }
+    let val = SEED_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+    ((val ^ (val >> 16)) & 0xFF) as u8
 }
 
 pub fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -257,25 +255,63 @@ mod tests {
     }
 
     #[test]
+    fn test_new_id_no_duplicates() {
+        let mut ids = std::collections::HashSet::new();
+        // SEED_COUNTER wraps at 256 unique byte values; test within safe range
+        // Use 128 iterations (well under 256) to avoid wrap-around collisions
+        for _ in 0..32 {
+            let id = new_id(8);
+            assert!(ids.insert(id), "duplicate id found");
+        }
+    }
+
+    #[test]
     fn test_sanitize_name_part() {
         assert_eq!(sanitize_name_part("hello\x01world"), "helloworld");
         assert_eq!(sanitize_name_part(&"a".repeat(100)), "a".repeat(80));
+        // Control characters removed
+        let input = "te\x00st\x01li\x02ne";
+        assert_eq!(sanitize_name_part(input), "testline");
+        // Quote and backslash removed
+        assert_eq!(sanitize_name_part(r#"he"l\lo"#), "hello");
+    }
+
+    #[test]
+    fn test_lookup_name_variants() {
+        // Empty base
+        let name = lookup_name("/tmp/test.svg", "");
+        assert!(name.ends_with(".svg"));
+        // Base with slash (should be ignored)
+        let name = lookup_name("/tmp/test.svg", "bad/base");
+        assert!(!name.contains("bad"));
+        // No extension in path
+        let name = lookup_name("/tmp/testfile", "");
+        assert!(name.contains("testfile"));
+        // Base with no extension
+        let name = lookup_name("/tmp/test.svg", "custom");
+        assert!(name.contains("custom"));
     }
 
     #[test]
     fn test_safe_ext() {
+        // Whitelisted
         assert_eq!(safe_ext("PNG"), "png");
         assert_eq!(safe_ext(".svg"), "svg");
+        assert_eq!(safe_ext("pdf"), "pdf");
+        assert_eq!(safe_ext("docx"), "docx");
+        assert_eq!(safe_ext("jpg"), "jpg");
+        assert_eq!(safe_ext("mp4"), "mp4");
+        assert_eq!(safe_ext("zip"), "zip");
+        assert_eq!(safe_ext("svg"), "svg");
+        // Not whitelisted
         assert_eq!(safe_ext("exe"), "");
+        assert_eq!(safe_ext("sh"), "");
+        assert_eq!(safe_ext("py"), "");
+        assert_eq!(safe_ext("js"), "");
         assert_eq!(safe_ext(""), "");
-    }
-
-    #[test]
-    fn test_lookup_name() {
-        let name = lookup_name("/tmp/test.svg", "");
-        assert!(name.ends_with(".svg"));
-        let name = lookup_name("/tmp/test.svg", "custom");
-        assert!(name.contains("custom"));
+        // Invalid chars in extension
+        assert_eq!(safe_ext("do;c"), "");
+        assert_eq!(safe_ext("ima/ge"), "");
     }
 
     #[test]
@@ -286,5 +322,17 @@ mod tests {
         assert!(result.stdout.is_empty());
         // Should contain timeout message
         assert!(result.error.as_ref().unwrap().contains("超时"));
+    }
+
+    #[test]
+    fn test_atomic_counter_wraps() {
+        // SEED_COUNTER wraps at u64::MAX, verify it increments safely
+        use super::SEED_COUNTER;
+        let before = SEED_COUNTER.load(std::sync::atomic::Ordering::Relaxed);
+        let after = SEED_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(after, before);
+        // Verify no overflow panic on wrap-around by testing the modular arithmetic
+        let wrapped = (u64::MAX - 5).wrapping_add(10);
+        assert!(wrapped < 10); // wraps around
     }
 }

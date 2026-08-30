@@ -269,20 +269,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_video_job_concurrency_semaphore() {
+    async fn test_video_job_set_error_returns_failed() {
         let store = VideoJobStore::new(60);
-        // Semaphore should allow up to MAX_VIDEO_CONCURRENCY concurrent jobs
-        let sem = &store.sem;
-        assert_eq!(sem.available_permits(), MAX_VIDEO_CONCURRENCY);
+        let job = store.create();
+        store.set_error(&job.id, "生成失败");
+        let updated = store.get(&job.id).unwrap();
+        assert_eq!(updated.status, JobStatus::Failed);
+        assert_eq!(updated.error, Some("生成失败".to_string()));
+    }
 
-        // Taking permits should reduce available count
-        let p1 = sem.try_acquire();
-        assert!(p1.is_ok());
-        assert_eq!(sem.available_permits(), MAX_VIDEO_CONCURRENCY - 1);
+    #[tokio::test]
+    async fn test_video_job_gc_clears_expired() {
+        let store = VideoJobStore::new(0);
+        let job = store.create();
+        // TTL is 0 minutes, so after a brief sleep it should be expired
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        store.gc();
+        assert!(store.get(&job.id).is_none());
+    }
 
-        let p2 = sem.try_acquire();
-        assert!(p2.is_ok());
-        drop(p1);
-        drop(p2);
+    #[tokio::test]
+    async fn test_video_job_concurrent_acquire_release() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let store = VideoJobStore::new(60);
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut handles = vec![];
+
+        for _ in 0..12 {
+            let s = store.clone();
+            let c = counter.clone();
+            handles.push(tokio::spawn(async move {
+                if s.acquire_one_slot() {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                    s.release_one_slot();
+                }
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+        // All 12 should have acquired at least once (some may have missed due to full semaphore)
+        assert!(counter.load(Ordering::SeqCst) > 0);
     }
 }

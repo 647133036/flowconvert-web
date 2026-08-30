@@ -530,17 +530,41 @@ mod tests {
     }
 
     #[test]
+    fn test_size_clamp() {
+        let tmp = std::env::temp_dir().join(format!("flowconvert_{}", new_id(8)));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Width 0 -> 1024, height 0 -> 1024
+        let result = make_image(tmp.to_str().unwrap(), "clamp test", 0, 0);
+        assert!(result.is_ok());
+        let _ = std::fs::remove_dir_all(tmp);
+
+        let tmp = std::env::temp_dir().join(format!("flowconvert_{}", new_id(8)));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Width > 4096 -> 4096, height > 4096 -> 4096
+        let result = make_image(tmp.to_str().unwrap(), "clamp test", 5000, 6000);
+        assert!(result.is_ok());
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
     fn test_size_to_tier() {
         assert_eq!(size_to_tier(500, 500), "1K");
+        assert_eq!(size_to_tier(1024, 1024), "1K");
         assert_eq!(size_to_tier(1500, 1000), "2K");
+        assert_eq!(size_to_tier(2048, 2048), "2K");
         assert_eq!(size_to_tier(2500, 2000), "3K");
+        assert_eq!(size_to_tier(3072, 3072), "3K");
         assert_eq!(size_to_tier(4000, 3000), "4K");
+        assert_eq!(size_to_tier(4097, 4097), "4K");
     }
 
     #[test]
     fn test_ratio_from_dims() {
+        assert_eq!(ratio_from_dims(0, 0), "1:1");
         assert_eq!(ratio_from_dims(1920, 1080), "16:9");
         assert_eq!(ratio_from_dims(1080, 1920), "9:16");
-        assert_eq!(ratio_from_dims(1024, 1024), "1:1");
+        assert_eq!(ratio_from_dims(100, 100), "1:1");
+        assert_eq!(ratio_from_dims(4, 3), "4:3");
+        assert_eq!(ratio_from_dims(3, 4), "3:4");
     }
 }

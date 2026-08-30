@@ -243,6 +243,7 @@ version = "0.1.2"
 dependencies = [
  "axum",
  "base64",
+ "crc32fast",
  "futures-util",
  "http-body-util",
  "image",

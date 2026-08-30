@@ -3,7 +3,6 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
-use std::sync::Arc;
 
 use crate::config::Config;
 use crate::service;
@@ -165,6 +164,8 @@ pub async fn handle_compose_image(
     let cfg = &app.config;
     let mut ref_paths: Vec<String> = Vec::new();
     let mut prompt: Option<String> = None;
+    let tmp_dir = cfg.tmp_dir.join(format!("compose_{}", new_id(8)));
+    std::fs::create_dir_all(&tmp_dir).ok();
 
     while let Ok(Some(field)) = multipart.next_field().await {
         let name = field.name().unwrap_or("");
@@ -190,8 +191,6 @@ pub async fn handle_compose_image(
             if !image_input_exts().contains(&ext.as_str()) {
                 continue;
             }
-            let tmp_dir = cfg.tmp_dir.join(format!("compose_{}", new_id(8)));
-            std::fs::create_dir_all(&tmp_dir).ok();
             let ref_path = tmp_dir.join(format!("ref_{}.{}", ref_paths.len(), ext));
             std::fs::write(&ref_path, &data).ok();
             ref_paths.push(ref_path.to_string_lossy().to_string());
@@ -213,8 +212,6 @@ pub async fn handle_compose_image(
     }
 
     let prompt = prompt.unwrap_or_default();
-    let tmp_dir = cfg.tmp_dir.join(format!("compose_{}", new_id(8)));
-    std::fs::create_dir_all(&tmp_dir).ok();
 
     let ref_refs: Vec<String> = ref_paths.iter().cloned().collect();
     let result = match tokio::task::spawn_blocking(move || {
