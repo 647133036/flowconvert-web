@@ -1,16 +1,20 @@
 mod config;
 mod handler;
 mod middleware;
+mod service;
+mod store;
+mod util;
 
 use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
 use axum::middleware as axum_mw;
-use axum::routing::{get, post};
 use axum::Router;
 
 use config::Config;
+use handler::{download, imagegen, pages, translate, videogen};
 use middleware::{security_headers, RateDecision, RateLimiter, MAX_API_BODY};
+use store::{FileStore, VideoJobStore};
 
 #[tokio::main]
 async fn main() {
@@ -30,41 +34,105 @@ async fn main() {
     let limiter = RateLimiter::new(100);
     limiter.spawn_cleanup();
 
+    let file_store = FileStore::new(cfg.out_dir.clone(), cfg.ttl_hours as u64);
+    let video_jobs = VideoJobStore::new(60);
+
+    let client = if !cfg.agnes_api_key.is_empty() || !cfg.sensenova_key.is_empty() {
+        Some(Arc::new(service::AIClient::new(
+            &cfg.agnes_base_url,
+            &cfg.agnes_api_key,
+            &cfg.sensenova_base,
+            &cfg.sensenova_key,
+            Some(video_jobs.clone()),
+        )))
+    } else {
+        None
+    };
+
+    let state = AppState {
+        config: Arc::new(cfg),
+        file_store,
+        video_jobs,
+        client,
+    };
+
     let api = Router::new()
-        .route("/api/formats", get(handler::convert::formats))
-        // Endpoints pending migration: routes stay registered so the
-        // frontend contract is preserved; each returns 501 for now.
-        .route("/api/convert/upload", post(handler::not_implemented))
-        .route("/api/convert/url", post(handler::not_implemented))
-        .route("/api/convert/pdf-to-office", post(handler::not_implemented))
-        .route("/api/convert/sketch", post(handler::not_implemented))
-        .route("/api/convert/idphoto", post(handler::not_implemented))
-        .route("/api/translate", post(handler::not_implemented))
-        .route("/api/translate/file", post(handler::not_implemented))
-        .route("/api/convert/image/text", post(handler::not_implemented))
-        .route("/api/convert/image/edit", post(handler::not_implemented))
-        .route("/api/convert/image/compose", post(handler::not_implemented))
-        .route("/api/convert/video/text", post(handler::not_implemented))
-        .route("/api/convert/video/keyframe", post(handler::not_implemented))
-        .route("/api/convert/video/ref", post(handler::not_implemented))
+        .route("/api/formats", axum::routing::get(handler::convert::formats))
+        .route(
+            "/api/convert/upload",
+            axum::routing::post(handler::convert::handle_upload_vectorize),
+        )
+        .route(
+            "/api/convert/url",
+            axum::routing::get(handler::convert::handle_url_vectorize)
+                .post(handler::convert::handle_upload_vectorize),
+        )
+        .route(
+            "/api/convert/pdf-to-office",
+            axum::routing::post(handler::convert::handle_pdf_to_office),
+        )
+        .route(
+            "/api/convert/sketch",
+            axum::routing::post(handler::convert::handle_sketch),
+        )
+        .route(
+            "/api/convert/idphoto",
+            axum::routing::post(handler::convert::handle_id_photo),
+        )
+        .route(
+            "/api/translate",
+            axum::routing::post(translate::handle_translate),
+        )
+        .route(
+            "/api/translate/file",
+            axum::routing::post(translate::handle_translate_file),
+        )
+        .route(
+            "/api/convert/image/text",
+            axum::routing::post(imagegen::handle_text_image),
+        )
+        .route(
+            "/api/convert/image/edit",
+            axum::routing::post(imagegen::handle_edit_image),
+        )
+        .route(
+            "/api/convert/image/compose",
+            axum::routing::post(imagegen::handle_compose_image),
+        )
+        .route(
+            "/api/convert/video/text",
+            axum::routing::post(videogen::handle_text_video),
+        )
+        .route(
+            "/api/convert/video/keyframe",
+            axum::routing::post(videogen::handle_keyframe_video),
+        )
+        .route(
+            "/api/convert/video/ref",
+            axum::routing::post(videogen::handle_ref_video),
+        )
         .route(
             "/api/convert/video/task/{id}",
-            get(handler::not_implemented),
+            axum::routing::get(videogen::handle_video_task_status),
         )
-        .route("/api/download/{*path}", get(handler::not_implemented))
+        .route(
+            "/api/download/{*name}",
+            axum::routing::get(download::handle_download),
+        )
         .layer(DefaultBodyLimit::max(MAX_API_BODY));
 
     let app = Router::new()
         .merge(api)
-        .route("/{*path}", get(handler::pages::page))
-        .route("/", get(handler::pages::page))
+        .route("/{*path}", axum::routing::get(pages::page))
+        .route("/", axum::routing::get(pages::page))
         .layer(axum_mw::from_fn_with_state(
             limiter.clone(),
             rate_limit_mw,
         ))
-        .layer(axum_mw::from_fn(security_headers));
+        .layer(axum_mw::from_fn(security_headers))
+        .with_state(state.clone());
 
-    let addr = format!("0.0.0.0:{}", cfg.port);
+    let addr = format!("0.0.0.0:{}", state.config.port);
     tracing::info!("FlowConvert 启动于 http://{addr}");
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
@@ -75,6 +143,14 @@ async fn main() {
     )
     .await
     .unwrap();
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub config: Arc<Config>,
+    pub file_store: Arc<FileStore>,
+    pub video_jobs: Arc<VideoJobStore>,
+    pub client: Option<Arc<service::AIClient>>,
 }
 
 /// Per-IP rate limiting for /api/ requests (mirrors Go `RateLimit` wiring).

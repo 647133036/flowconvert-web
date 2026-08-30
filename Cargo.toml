@@ -7,7 +7,7 @@ license = "Apache-2.0"
 
 [dependencies]
 axum = { version = "0.8", features = ["multipart"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "fs", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "fs", "signal", "process", "io-util"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
@@ -15,6 +15,17 @@ include_dir = "0.7"
 percent-encoding = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs", "add-extension"] }
+mime_guess = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+which = "5"
+futures-util = "0.3"
+# 可选：httpmime for multipart
+base64 = "0.22"
+urlencoding = "2"
 
 [profile.release]
 strip = true
