@@ -2,6 +2,7 @@
 flowConvert
 flowconvert
 *.exe
+target/
 
 # Data
 data/output/
