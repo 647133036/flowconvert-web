@@ -40,3 +40,6 @@ Thumbs.db
 
 # Environment
 .env
+
+# Runtime temp outputs
+data/tmp/
