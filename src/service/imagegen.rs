@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use image::{DynamicImage, GenericImage, GenericImageView, ImageBuffer, Rgba};
+use crate::service::aiclient::AIClient;
 
 
 /// Procedural abstract image generation using image crate.
@@ -479,6 +480,127 @@ fn ratio_from_dims(w: i32, h: i32) -> String {
         return "1:1".to_string();
     }
     format!("{}:{}", w / g, h / g)
+}
+
+/// AI-powered image generation functions
+pub async fn make_image_ai(
+    client: &AIClient,
+    tmp_dir: &str,
+    prompt: &str,
+    width: i32,
+    height: i32,
+) -> Result<String, String> {
+    let width = if width <= 0 { 1024 } else { width };
+    let height = if height <= 0 { 1024 } else { height };
+    let dest = PathBuf::from(tmp_dir).join("generated.png");
+    let size = size_to_tier(width, height);
+    let ratio = ratio_from_dims(width, height);
+
+    // Try Agnes first
+    if client.has_agnes() {
+        match client.gen_image_agnes("agnes-image-2.1-flash", prompt, &size, &ratio, &[]).await {
+            Ok((img_url, b64)) => {
+                if client.download_image(&img_url, &b64, dest.to_string_lossy().as_ref()).await.is_ok() {
+                    return Ok(dest.to_string_lossy().to_string());
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    // Fallback to SenseNova
+    if client.has_sensenova() {
+        match client.gen_image_sense_nova("sensenova-u1.5-lite", prompt, &size, &ratio, &[]).await {
+            Ok((img_url, b64)) => {
+                if client.download_image(&img_url, &b64, dest.to_string_lossy().as_ref()).await.is_ok() {
+                    return Ok(dest.to_string_lossy().to_string());
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    Err("AI图片生成不可用".to_string())
+}
+
+pub async fn make_edited_image_ai(
+    client: &AIClient,
+    tmp_dir: &str,
+    src_path: &str,
+    prompt: &str,
+    width: i32,
+    height: i32,
+) -> Result<String, String> {
+    let dest = PathBuf::from(tmp_dir).join("edited.png");
+    let size = size_to_tier(width, height);
+    let ratio = ratio_from_dims(width, height);
+    let data_uri = AIClient::file_to_data_uri(src_path).map_err(|e| format!("读取源图片失败: {}", e))?;
+
+    // Try Agnes first
+    if client.has_agnes() {
+        match client.gen_image_agnes("agnes-image-2.1-flash", prompt, &size, &ratio, &[data_uri.clone()]).await {
+            Ok((img_url, b64)) => {
+                if client.download_image(&img_url, &b64, dest.to_string_lossy().as_ref()).await.is_ok() {
+                    return Ok(dest.to_string_lossy().to_string());
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    // Fallback to SenseNova
+    if client.has_sensenova() {
+        match client.gen_image_sense_nova("sensenova-u1.5-lite", prompt, &size, &ratio, &[data_uri]).await {
+            Ok((img_url, b64)) => {
+                if client.download_image(&img_url, &b64, dest.to_string_lossy().as_ref()).await.is_ok() {
+                    return Ok(dest.to_string_lossy().to_string());
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    Err("AI图片编辑不可用".to_string())
+}
+
+pub async fn make_compose_image_ai(
+    client: &AIClient,
+    tmp_dir: &str,
+    prompt: &str,
+    ref_paths: &[String],
+    width: i32,
+    height: i32,
+) -> Result<String, String> {
+    let dest = PathBuf::from(tmp_dir).join("composed.png");
+    let size = size_to_tier(width, height);
+    let ratio = ratio_from_dims(width, height);
+
+    let mut data_uris: Vec<String> = Vec::new();
+    for p in ref_paths {
+        if let Ok(uri) = AIClient::file_to_data_uri(p) {
+            data_uris.push(uri);
+        }
+    }
+
+    // Try Agnes first
+    if client.has_agnes() {
+        match client.gen_image_agnes("agnes-image-2.1-flash", prompt, &size, &ratio, &data_uris).await {
+            Ok((img_url, b64)) => {
+                if client.download_image(&img_url, &b64, dest.to_string_lossy().as_ref()).await.is_ok() {
+                    return Ok(dest.to_string_lossy().to_string());
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    // Fallback to SenseNova
+    if client.has_sensenova() {
+        match client.gen_image_sense_nova("sensenova-u1.5-lite", prompt, &size, &ratio, &data_uris).await {
+            Ok((img_url, b64)) => {
+                if client.download_image(&img_url, &b64, dest.to_string_lossy().as_ref()).await.is_ok() {
+                    return Ok(dest.to_string_lossy().to_string());
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    Err("AI图片合成不可用".to_string())
 }
 
 #[allow(dead_code)]

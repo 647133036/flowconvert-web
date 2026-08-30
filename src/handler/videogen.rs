@@ -8,7 +8,7 @@ use crate::store::JobStatus;
 use crate::util::new_id;
 use crate::AppState;
 
-const ASPECT_RATIOS: &[&str] = &["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
+const ASPECT_RATIOS: &[&str] = &["16:9", "9:16", "1:1", "4:3", "3:4", "2:3", "3:2", "21:9"];
 const MAX_DURATION: i32 = 120;
 const MIN_DURATION: i32 = 1;
 const MAX_FRAME_SIZE: usize = 20 * 1024 * 1024;
@@ -110,13 +110,24 @@ pub async fn handle_text_video(
                 &sensenova_key,
                 Some(app.video_jobs.clone()),
             );
-            if let Ok(video_path) = service::make_text_video_ai(
-                &ai_client,
-                tmp_dir.to_str().unwrap(),
-                &prompt,
-                duration,
-                &aspect_ratio,
-            ).await {
+            let video_path = if duration > 12 {
+                service::make_long_text_video_ai(
+                    &ai_client,
+                    tmp_dir.to_str().unwrap(),
+                    &prompt,
+                    duration,
+                    &aspect_ratio,
+                ).await.ok()
+            } else {
+                service::make_text_video_ai(
+                    &ai_client,
+                    tmp_dir.to_str().unwrap(),
+                    &prompt,
+                    duration,
+                    &aspect_ratio,
+                ).await.ok()
+            };
+            if let Some(video_path) = video_path {
                 if let Ok(dl_url) = app.file_store.register(&video_path, "video.mp4") {
                     app.video_jobs.set_complete(&job_id, &dl_url);
                 } else {
@@ -125,6 +136,9 @@ pub async fn handle_text_video(
                 app.video_jobs.release_one_slot();
                 return;
             }
+            app.video_jobs.set_notice(&job_id, "AI 生成失败，已降级为本地合成视频");
+        } else {
+            app.video_jobs.set_notice(&job_id, "AI 不可用，已降级为本地合成视频");
         }
 
         // Fallback to Python script
@@ -282,6 +296,16 @@ pub async fn handle_keyframe_video(
             return;
         }
 
+        // Upload frames to public dir so AI API can fetch them
+        let first_url = match app.file_store.register(first_path.to_string_lossy().as_ref(), "first.png") {
+            Ok(url) => cfg.base_url.clone() + &url,
+            Err(_) => String::new(),
+        };
+        let last_url = match app.file_store.register(last_path.to_string_lossy().as_ref(), "last.png") {
+            Ok(url) => cfg.base_url.clone() + &url,
+            Err(_) => String::new(),
+        };
+
         // Try AI path first
         if !agnes_key.is_empty() {
             let ai_client = service::AIClient::new(
@@ -291,15 +315,28 @@ pub async fn handle_keyframe_video(
                 &sensenova_key,
                 Some(app.video_jobs.clone()),
             );
-            if let Ok(video_path) = service::make_keyframe_video_ai(
-                &ai_client,
-                tmp_dir.to_str().unwrap(),
-                first_path.to_string_lossy().as_ref(),
-                last_path.to_string_lossy().as_ref(),
-                &prompt,
-                duration,
-                &aspect_ratio,
-            ).await {
+            let video_path = if duration > 12 {
+                service::make_long_keyframe_video_ai(
+                    &ai_client,
+                    tmp_dir.to_str().unwrap(),
+                    &first_url,
+                    &last_url,
+                    &prompt,
+                    duration,
+                    &aspect_ratio,
+                ).await.ok()
+            } else {
+                service::make_keyframe_video_ai(
+                    &ai_client,
+                    tmp_dir.to_str().unwrap(),
+                    &first_url,
+                    &last_url,
+                    &prompt,
+                    duration,
+                    &aspect_ratio,
+                ).await.ok()
+            };
+            if let Some(video_path) = video_path {
                 if let Ok(dl_url) = app.file_store.register(&video_path, "keyframe_video.mp4") {
                     app.video_jobs.set_complete(&job_id, &dl_url);
                 } else {
@@ -308,6 +345,9 @@ pub async fn handle_keyframe_video(
                 app.video_jobs.release_one_slot();
                 return;
             }
+            app.video_jobs.set_notice(&job_id, "AI 生成失败，已降级为本地合成视频");
+        } else {
+            app.video_jobs.set_notice(&job_id, "AI 不可用，已降级为本地合成视频");
         }
 
         // Fallback to Python
@@ -445,12 +485,16 @@ pub async fn handle_ref_video(
             return;
         }
 
-        // Save reference images
+        // Save reference images and upload to public dir
         let mut ref_paths: Vec<String> = Vec::new();
+        let mut ref_urls: Vec<String> = Vec::new();
         for (i, (data, ext)) in ref_images.iter().enumerate() {
             let ref_path = tmp_dir.join(format!("ref_{}.{}", i, ext));
             if tokio::fs::write(&ref_path, data).await.is_ok() {
                 ref_paths.push(ref_path.to_string_lossy().to_string());
+                if let Ok(url) = app.file_store.register(ref_path.to_string_lossy().as_ref(), &format!("ref_{}.png", i)) {
+                    ref_urls.push(cfg.base_url.clone() + &url);
+                }
             }
         }
 
@@ -469,14 +513,26 @@ pub async fn handle_ref_video(
                 &sensenova_key,
                 Some(app.video_jobs.clone()),
             );
-            if let Ok(video_path) = service::make_ref_video_ai(
-                &ai_client,
-                tmp_dir.to_str().unwrap(),
-                &prompt,
-                &ref_paths,
-                duration,
-                &aspect_ratio,
-            ).await {
+            let video_path = if duration > 12 {
+                service::make_long_ref_video_ai(
+                    &ai_client,
+                    tmp_dir.to_str().unwrap(),
+                    &prompt,
+                    &ref_urls,
+                    duration,
+                    &aspect_ratio,
+                ).await.ok()
+            } else {
+                service::make_ref_video_ai(
+                    &ai_client,
+                    tmp_dir.to_str().unwrap(),
+                    &prompt,
+                    &ref_urls,
+                    duration,
+                    &aspect_ratio,
+                ).await.ok()
+            };
+            if let Some(video_path) = video_path {
                 if let Ok(dl_url) = app.file_store.register(&video_path, "ref_video.mp4") {
                     app.video_jobs.set_complete(&job_id, &dl_url);
                 } else {
@@ -485,6 +541,9 @@ pub async fn handle_ref_video(
                 app.video_jobs.release_one_slot();
                 return;
             }
+            app.video_jobs.set_notice(&job_id, "AI 生成失败，已降级为本地合成视频");
+        } else {
+            app.video_jobs.set_notice(&job_id, "AI 不可用，已降级为本地合成视频");
         }
 
         // Fallback to Python
@@ -589,7 +648,8 @@ mod tests {
         for ratio in ASPECT_RATIOS {
             assert!(ASPECT_RATIOS.contains(ratio));
         }
-        assert!(!ASPECT_RATIOS.contains(&"3:2"));
+        assert!(ASPECT_RATIOS.contains(&"2:3"));
+        assert!(ASPECT_RATIOS.contains(&"3:2"));
         assert!(!ASPECT_RATIOS.contains(&"1:2"));
         assert!(!ASPECT_RATIOS.contains(&"invalid"));
     }
