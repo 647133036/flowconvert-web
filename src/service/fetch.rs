@@ -11,13 +11,17 @@ use crate::util::new_id;
 /// Check if an IpAddr is a safe public address (not loopback, private, link-local, or unspecified).
 fn is_safe_public_ip(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => !v4.is_loopback() && !v4.is_private() && !v4.is_link_local() && !v4.is_unspecified(),
+        IpAddr::V4(v4) => {
+            !v4.is_loopback() && !v4.is_private() && !v4.is_link_local() && !v4.is_unspecified()
+        }
         IpAddr::V6(v6) => {
-            // IPv6: reject loopback, unspecified, link-local (fe80::/10), and documentation (2001:db8::/32)
-            v6.is_loopback() || v6.is_unspecified()
-                || v6.segments()[0] & 0xFC00 == 0xFC00  // fe80::/10 link-local
-                || v6.segments()[0] == 0x2001 && v6.segments()[1] == 0xDB8  // 2001:db8::/32 documentation
-                || v6.is_multicast()
+            // Reject loopback, unspecified, link-local (fe80::/10),
+            // documentation (2001:db8::/32), and multicast
+            !v6.is_loopback()
+                && !v6.is_unspecified()
+                && !(v6.segments()[0] & 0xFC00 == 0xFC00)
+                && !(v6.segments()[0] == 0x2001 && v6.segments()[1] == 0xDB8)
+                && !v6.is_multicast()
         }
     }
 }
@@ -41,7 +45,8 @@ pub async fn fetch_image(
     // then verify the actual connected IP is in the pre-resolved set.
     // This prevents DNS rebinding attacks.
     let host = parsed.host_str().ok_or("URL 缺少 host")?.to_string();
-    let pre_resolved: Vec<SocketAddr> = tokio::net::lookup_host(format!("{}:443", host))
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let pre_resolved: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
         .await
         .map_err(|_| "DNS 解析失败".to_string())?
         .collect();

@@ -287,27 +287,23 @@ pub async fn handle_url_vectorize(
         }
     };
 
-    let content = match std::fs::read(&result) {
-        Ok(c) => c,
-        Err(_) => {
+    let fname_for_store = format!("converted.{}", output);
+    let dl_url = match app.file_store.register(&result, &fname_for_store) {
+        Ok(url) => url,
+        Err(e) => {
+            tracing::error!("保存矢量化文件失败: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
-                "error": "读取结果文件失败"
+                "error": "保存文件失败"
             }))).into_response();
         }
     };
 
-    let mut res = Response::new(axum::body::Body::from(content));
-    let ct = match output.as_str() {
-        "svg" => "image/svg+xml",
-        "pdf" => "application/pdf",
-        _ => "application/octet-stream",
-    };
-    res.headers_mut().insert(
-        header::CONTENT_TYPE,
-        ct.parse().unwrap(),
-    );
-    res
+    (StatusCode::OK, Json(serde_json::json!({
+        "success": true,
+        "download_url": dl_url,
+        "format": output,
+    }))).into_response()
 }
 
 /// POST /api/convert/pdf-to-office
@@ -351,6 +347,13 @@ pub async fn handle_pdf_to_office(
         }
     };
 
+    if data.len() < 5 || !data.starts_with(b"%PDF-") {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "success": false,
+            "error": "仅支持PDF文件"
+        }))).into_response();
+    }
+
     let output = output.unwrap_or_else(|| "docx".to_string());
     if valid_output(&output, "pdf").is_none() {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
@@ -361,6 +364,7 @@ pub async fn handle_pdf_to_office(
 
     let tmp_dir = cfg.tmp_dir.join(format!("pdf2office_{}", new_id(8)));
     std::fs::create_dir_all(&tmp_dir).ok();
+    let tmp_dir_clone = tmp_dir.clone();
 
     let src_path = tmp_dir.join("upload.pdf");
     if let Err(_) = std::fs::write(&src_path, &data) {
@@ -378,6 +382,7 @@ pub async fn handle_pdf_to_office(
         Ok(Ok(path)) => path,
         Ok(Err(e)) => {
             tracing::error!("PDF转换失败: {}", e);
+            let _ = std::fs::remove_dir_all(&tmp_dir_clone);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
                 "error": "处理失败，请稍后重试"
@@ -385,6 +390,7 @@ pub async fn handle_pdf_to_office(
         }
         Err(e) => {
             tracing::error!("PDF转换任务失败: {}", e);
+            let _ = std::fs::remove_dir_all(&tmp_dir_clone);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
                 "error": "处理失败，请稍后重试"
@@ -392,33 +398,25 @@ pub async fn handle_pdf_to_office(
         }
     };
 
-    let content = match std::fs::read(&result) {
-        Ok(c) => c,
-        Err(_) => {
+    let dl_url = match app.file_store.register(&result, &format!("converted.{}", output)) {
+        Ok(url) => url,
+        Err(e) => {
+            tracing::error!("保存PDF转换文件失败: {}", e);
+            let _ = std::fs::remove_dir_all(&tmp_dir_clone);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
-                "error": "读取结果文件失败"
+                "error": "保存文件失败"
             }))).into_response();
         }
     };
 
-    let content_type = if output == "xlsx" {
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    } else {
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    };
+    let _ = std::fs::remove_dir_all(&tmp_dir_clone);
 
-    let mut res = Response::new(axum::body::Body::from(content));
-    res.headers_mut().insert(
-        header::CONTENT_TYPE,
-        content_type.parse().unwrap(),
-    );
-    let disp = format!("attachment; filename=\"converted.{}\"", output);
-    res.headers_mut().insert(
-        header::CONTENT_DISPOSITION,
-        disp.parse().unwrap(),
-    );
-    res
+    (StatusCode::OK, Json(serde_json::json!({
+        "success": true,
+        "download_url": dl_url,
+        "format": output,
+    }))).into_response()
 }
 
 /// POST /api/convert/sketch
@@ -464,13 +462,22 @@ pub async fn handle_sketch(
         }
     };
 
+    if !is_valid_image_magic(&data) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "success": false,
+            "error": "仅支持PNG/JPG/GIF/WebP/BMP图片"
+        }))).into_response();
+    }
+
     let sigma = sigma.unwrap_or(3.0);
 
     let tmp_dir = cfg.tmp_dir.join(format!("sketch_{}", new_id(8)));
     std::fs::create_dir_all(&tmp_dir).ok();
+    let tmp_dir_clone = tmp_dir.clone();
 
     let src_path = tmp_dir.join("upload.png");
     if let Err(_) = std::fs::write(&src_path, &data) {
+        let _ = std::fs::remove_dir_all(&tmp_dir_clone);
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
             "success": false,
             "error": "服务器错误"
@@ -484,6 +491,7 @@ pub async fn handle_sketch(
         Ok(Ok(path)) => path,
         Ok(Err(e)) => {
             tracing::error!("素描生成失败: {}", e);
+            let _ = std::fs::remove_dir_all(&tmp_dir_clone);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
                 "error": "处理失败，请稍后重试"
@@ -491,6 +499,7 @@ pub async fn handle_sketch(
         }
         Err(e) => {
             tracing::error!("素描生成任务失败: {}", e);
+            let _ = std::fs::remove_dir_all(&tmp_dir_clone);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
                 "error": "处理失败，请稍后重试"
@@ -498,26 +507,25 @@ pub async fn handle_sketch(
         }
     };
 
-    let content = match std::fs::read(&result) {
-        Ok(c) => c,
-        Err(_) => {
+    let dl_url = match app.file_store.register(&result, "sketch.png") {
+        Ok(url) => url,
+        Err(e) => {
+            tracing::error!("保存素描文件失败: {}", e);
+            let _ = std::fs::remove_dir_all(&tmp_dir_clone);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
-                "error": "读取结果文件失败"
+                "error": "保存文件失败"
             }))).into_response();
         }
     };
 
-    let mut res = Response::new(axum::body::Body::from(content));
-    res.headers_mut().insert(
-        header::CONTENT_TYPE,
-        "image/png".parse().unwrap(),
-    );
-    res.headers_mut().insert(
-        header::CONTENT_DISPOSITION,
-        "attachment; filename=\"sketch.png\"".parse().unwrap(),
-    );
-    res
+    let _ = std::fs::remove_dir_all(&tmp_dir_clone);
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "success": true,
+        "download_url": dl_url,
+        "format": "png",
+    }))).into_response()
 }
 
 /// POST /api/convert/idphoto
@@ -567,18 +575,29 @@ pub async fn handle_id_photo(
         }
     };
 
+    if !is_valid_image_magic(&data) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "success": false,
+            "error": "仅支持PNG/JPG/GIF/WebP/BMP图片"
+        }))).into_response();
+    }
+
     let ext = match &data[..data.len().min(512)] {
         d if d.starts_with(&[0x89, 0x50, 0x4E, 0x47]) => "png",
         d if d.starts_with(&[0xFF, 0xD8, 0xFF]) => "jpg",
         d if d.starts_with(&[0x52, 0x49, 0x46, 0x46]) && &d[8..12] == b"WEBP" => "webp",
+        d if d.starts_with(&[0x47, 0x49, 0x46]) => "gif",
+        d if d.starts_with(&[0x42, 0x4D]) => "bmp",
         _ => "png",
     };
 
     let tmp_dir = cfg.tmp_dir.join(format!("idphoto_{}", new_id(8)));
     std::fs::create_dir_all(&tmp_dir).ok();
+    let tmp_dir_clone = tmp_dir.clone();
 
     let src_path = tmp_dir.join(format!("upload.{}", ext));
     if let Err(_) = std::fs::write(&src_path, &data) {
+        let _ = std::fs::remove_dir_all(&tmp_dir_clone);
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
             "success": false,
             "error": "服务器错误"
@@ -595,6 +614,7 @@ pub async fn handle_id_photo(
         Ok(Ok(path)) => path,
         Ok(Err(e)) => {
             tracing::error!("证件照生成失败: {}", e);
+            let _ = std::fs::remove_dir_all(&tmp_dir_clone);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
                 "error": "处理失败，请稍后重试"
@@ -602,6 +622,7 @@ pub async fn handle_id_photo(
         }
         Err(e) => {
             tracing::error!("证件照生成任务失败: {}", e);
+            let _ = std::fs::remove_dir_all(&tmp_dir_clone);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
                 "error": "处理失败，请稍后重试"
@@ -612,12 +633,15 @@ pub async fn handle_id_photo(
     let content = match std::fs::read(&result) {
         Ok(c) => c,
         Err(_) => {
+            let _ = std::fs::remove_dir_all(&tmp_dir_clone);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
                 "error": "读取结果文件失败"
             }))).into_response();
         }
     };
+
+    let _ = std::fs::remove_dir_all(&tmp_dir_clone);
 
     let mut res = Response::new(axum::body::Body::from(content));
     res.headers_mut().insert(

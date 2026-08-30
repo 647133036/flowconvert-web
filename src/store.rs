@@ -203,7 +203,7 @@ mod tests {
         assert!(dl_url.starts_with("/api/download/"));
 
         let name = dl_url.strip_prefix("/api/download/").unwrap();
-        let (ct, disp, bytes, size) = store.download_handler(name).unwrap();
+        let (ct, _disp, bytes, size) = store.download_handler(name).unwrap();
         assert_eq!(ct, "application/octet-stream");
         assert_eq!(size, 11);
         assert_eq!(&bytes[..], b"hello world");

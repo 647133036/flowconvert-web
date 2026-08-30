@@ -52,16 +52,10 @@ pub async fn handle_translate(
     Form(form): Form<TranslateForm>,
 ) -> impl IntoResponse {
     let cfg = &app.config;
-    if form.text.trim().is_empty() {
+    if let Err(msg) = validate_translate_params(&form.text, &form.source, &form.target) {
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
             "success": false,
-            "error": "请输入要翻译的文本"
-        }))).into_response();
-    }
-    if form.text.chars().count() > MAX_TEXT_LEN {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-            "success": false,
-            "error": format!("文本长度不能超过{}个字符", MAX_TEXT_LEN)
+            "error": msg
         }))).into_response();
     }
     let source = if form.source.is_empty() || form.source == "auto" {
@@ -69,19 +63,7 @@ pub async fn handle_translate(
     } else {
         form.source.to_lowercase()
     };
-    if !LANGUAGES.contains(&source.as_str()) && source != "auto" {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-            "success": false,
-            "error": "不支持的源语言"
-        }))).into_response();
-    }
     let target = form.target.to_lowercase();
-    if !LANGUAGES.contains(&target.as_str()) {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-            "success": false,
-            "error": "不支持的目标语言"
-        }))).into_response();
-    }
 
     let tmp_dir = cfg.tmp_dir.join(format!("translate_{}", new_id(8)));
     std::fs::create_dir_all(&tmp_dir).ok();
@@ -107,7 +89,7 @@ pub async fn handle_translate(
         }
     };
 
-    drop(tmp_dir);
+    let _ = std::fs::remove_dir_all(&tmp_dir);
     (StatusCode::OK, Json(serde_json::json!({
         "success": true,
         "text": result.text,
@@ -174,6 +156,8 @@ pub async fn handle_translate_file(
 
     let tmp_dir = cfg.tmp_dir.join(format!("translate_file_{}", new_id(8)));
     std::fs::create_dir_all(&tmp_dir).ok();
+    let tmp_dir_str = tmp_dir.to_string_lossy().to_string();
+    let tmp_dir_clone = tmp_dir.clone();
 
     let src_path = tmp_dir.join(format!("upload.{}", ext));
     if let Err(_) = std::fs::write(&src_path, &data) {
@@ -211,7 +195,7 @@ pub async fn handle_translate_file(
     };
 
     let result = match tokio::task::spawn_blocking(move || {
-        service::translate_file(tmp_dir.to_str().unwrap(), &src_str, &source, &target)
+        service::translate_file(&tmp_dir_str, &src_str, &source, &target)
     })
     .await {
         Ok(Ok(path)) => path,
@@ -240,6 +224,8 @@ pub async fn handle_translate_file(
             }))).into_response();
         }
     };
+
+    let _ = std::fs::remove_dir_all(&tmp_dir_clone);
 
     let content_type = mime_guess::from_path(&result).first_or_octet_stream().to_string();
     let disp = format!("attachment; filename=\"translated.{}\"", ext);

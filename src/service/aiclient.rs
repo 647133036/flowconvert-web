@@ -257,7 +257,7 @@ impl AIClient {
         let mut resp_result: Result<Vec<u8>, String> = Err("no attempt made".to_string());
 
         for attempt in 0..max_retries {
-            self.acquire_agnes_token();
+            self.acquire_agnes_token().await;
             resp_result = self.post_json(
                 &format!("{}/videos", self.agnes_base),
                 &self.agnes_key,
@@ -272,13 +272,13 @@ impl AIClient {
             if err_str.contains("503") && err_str.contains("video_queue_full") {
                 let backoff = Duration::from_secs(std::cmp::min(10 * (attempt + 1) as u64, 300));
                 eprintln!("[Agnes] 503 queue full, retry {}/{} after {:?}", attempt + 1, max_retries, backoff);
-                std::thread::sleep(backoff);
+                tokio::time::sleep(backoff).await;
                 continue;
             }
             if err_str.contains("429") || err_str.contains("rate_limit") || err_str.contains("rate limit") {
                 let backoff = Duration::from_secs(std::cmp::min(30 * (attempt + 1) as u64, 120));
                 eprintln!("[Agnes] 429 rate limited, retry {}/{} after {:?}", attempt + 1, max_retries, backoff);
-                std::thread::sleep(backoff);
+                tokio::time::sleep(backoff).await;
                 continue;
             }
             _last_err = Some(resp_result.as_ref().unwrap_err().clone());
@@ -337,14 +337,14 @@ impl AIClient {
             let resp = match self.http.get(&poll_url).send().await {
                 Ok(r) => r,
                 Err(_) => {
-                    std::thread::sleep(interval);
+                    tokio::time::sleep(interval).await;
                     continue;
                 }
             };
             let body = match resp.text().await {
                 Ok(b) => b,
                 Err(_) => {
-                    std::thread::sleep(interval);
+                    tokio::time::sleep(interval).await;
                     continue;
                 }
             };
@@ -370,7 +370,7 @@ impl AIClient {
             let res: VideoResultResponse = match serde_json::from_str(&body) {
                 Ok(r) => r,
                 Err(_) => {
-                    std::thread::sleep(interval);
+                    tokio::time::sleep(interval).await;
                     continue;
                 }
             };
@@ -392,7 +392,7 @@ impl AIClient {
                     .unwrap_or_else(|| "生成失败".to_string());
                 return Err(format!("视频生成失败: {}", msg));
             }
-            std::thread::sleep(interval);
+            tokio::time::sleep(interval).await;
         }
         Err("视频生成超时".to_string())
     }
@@ -407,7 +407,7 @@ impl AIClient {
         for attempt in 0..SEGMENT_ATTEMPTS {
             if attempt > 0 {
                 eprintln!("[Agnes] 段{}第{}次重试", label, attempt + 1);
-                std::thread::sleep(Duration::from_secs(5));
+                tokio::time::sleep(Duration::from_secs(5)).await;
             }
             let video_id = match self.create_video_task(params).await {
                 Ok(id) => id,
@@ -478,25 +478,30 @@ impl AIClient {
         Ok(bytes.to_vec())
     }
 
-    fn acquire_agnes_token(&self) {
-        let mut state = self.rate_limiter.lock().unwrap();
-        let now = Instant::now();
-        if now.duration_since(state.agnes_since) > Duration::from_secs(60) {
-            state.agnes_count = 0;
-            state.agnes_since = now;
-        }
-        while state.agnes_count >= 6 {
-            let wait = Duration::from_secs(60) - now.duration_since(state.agnes_since);
-            if wait.as_secs() > 0 {
-                std::thread::sleep(wait);
+    async fn acquire_agnes_token(&self) {
+        loop {
+            let wait = {
+                let mut state = self.rate_limiter.lock().unwrap();
+                let now = Instant::now();
+                if now.duration_since(state.agnes_since) > Duration::from_secs(60) {
+                    state.agnes_count = 0;
+                    state.agnes_since = now;
+                }
+                if state.agnes_count < 6 {
+                    state.agnes_count += 1;
+                    None
+                } else {
+                    Some(Duration::from_secs(60) - now.duration_since(state.agnes_since))
+                }
+            };
+            match wait {
+                None => return,
+                Some(dur) if dur.as_secs() > 0 => {
+                    tokio::time::sleep(dur).await;
+                }
+                _ => {}
             }
-            let now = Instant::now();
-            if now.duration_since(state.agnes_since) > Duration::from_secs(60) {
-                state.agnes_count = 0;
-                state.agnes_since = now;
-            }
         }
-        state.agnes_count += 1;
     }
 }
 

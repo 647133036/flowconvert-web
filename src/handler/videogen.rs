@@ -11,6 +11,21 @@ use crate::AppState;
 const ASPECT_RATIOS: &[&str] = &["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"];
 const MAX_DURATION: i32 = 120;
 const MIN_DURATION: i32 = 1;
+const MAX_FRAME_SIZE: usize = 20 * 1024 * 1024;
+const ALLOWED_IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "bmp", "tiff", "webp", "gif"];
+
+fn sanitize_image_ext(filename: &Option<String>) -> String {
+    let ext = filename
+        .as_ref()
+        .and_then(|f| std::path::Path::new(f).extension())
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if ALLOWED_IMAGE_EXTS.contains(&ext.as_str()) {
+        ext
+    } else {
+        String::new()
+    }
+}
 
 pub async fn handle_text_video(
     State(app): State<AppState>,
@@ -163,7 +178,7 @@ pub async fn handle_keyframe_video(
             "first_frame" => {
                 let fname = field.file_name().map(|s| s.to_string());
                 if let Ok(data) = field.bytes().await {
-                    if data.len() <= 20 * 1024 * 1024 {
+                    if data.len() <= MAX_FRAME_SIZE {
                         first_frame = Some(data.to_vec());
                         first_name = fname;
                     }
@@ -172,7 +187,7 @@ pub async fn handle_keyframe_video(
             "last_frame" => {
                 let fname = field.file_name().map(|s| s.to_string());
                 if let Ok(data) = field.bytes().await {
-                    if data.len() <= 20 * 1024 * 1024 {
+                    if data.len() <= MAX_FRAME_SIZE {
                         last_frame = Some(data.to_vec());
                         last_name = fname;
                     }
@@ -251,9 +266,9 @@ pub async fn handle_keyframe_video(
             return;
         }
 
-        // Save uploaded frames
-        let first_ext = extract_ext(&first_name);
-        let last_ext = extract_ext(&last_name);
+        // Save uploaded frames with sanitized extensions
+        let first_ext = sanitize_image_ext(&first_name);
+        let last_ext = sanitize_image_ext(&last_name);
         let first_path = tmp_dir.join(format!("first.{}", first_ext));
         let last_path = tmp_dir.join(format!("last.{}", last_ext));
         if let Err(e) = tokio::fs::write(&first_path, &first_frame).await {
@@ -351,8 +366,8 @@ pub async fn handle_ref_video(
             name if name.starts_with("ref_") => {
                 let fname = field.file_name().map(|s| s.to_string());
                 if let Ok(data) = field.bytes().await {
-                    if data.len() <= 20 * 1024 * 1024 {
-                        let ext = extract_ext_opt(fname.as_deref());
+                    if data.len() <= MAX_FRAME_SIZE {
+                        let ext = sanitize_image_ext(&fname);
                         ref_images.push((data.to_vec(), ext));
                     }
                 }
@@ -565,21 +580,6 @@ pub async fn handle_video_task_status(
     (StatusCode::OK, Json(resp)).into_response()
 }
 
-fn extract_ext(filename: &Option<String>) -> String {
-    filename
-        .as_ref()
-        .and_then(|f| std::path::Path::new(f).extension())
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_default()
-}
-
-fn extract_ext_opt(filename: Option<&str>) -> String {
-    filename
-        .and_then(|f| std::path::Path::new(f).extension())
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,16 +595,18 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_ext() {
-        assert_eq!(extract_ext(&Some("image.png".to_string())), "png");
-        assert_eq!(extract_ext(&Some("photo.JPEG".to_string())), "jpeg");
-        assert_eq!(extract_ext(&None), "");
-        assert_eq!(extract_ext(&Some("noext".to_string())), "");
-    }
-
-    #[test]
-    fn test_extract_ext_opt() {
-        assert_eq!(extract_ext_opt(Some("image.svg")), "svg");
-        assert_eq!(extract_ext_opt(None), "");
+    fn test_sanitize_image_ext() {
+        assert_eq!(sanitize_image_ext(&Some("image.png".to_string())), "png");
+        assert_eq!(sanitize_image_ext(&Some("photo.jpg".to_string())), "jpg");
+        assert_eq!(sanitize_image_ext(&Some("webcam.jpeg".to_string())), "jpeg");
+        assert_eq!(sanitize_image_ext(&Some("anim.gif".to_string())), "gif");
+        assert_eq!(sanitize_image_ext(&Some("anim.webp".to_string())), "webp");
+        assert_eq!(sanitize_image_ext(&Some("bitmap.bmp".to_string())), "bmp");
+        assert_eq!(sanitize_image_ext(&Some("script.sh".to_string())), "");
+        assert_eq!(sanitize_image_ext(&Some("shell.exe".to_string())), "");
+        assert_eq!(sanitize_image_ext(&Some("malicious.png/.sh".to_string())), "");
+        assert_eq!(sanitize_image_ext(&Some("../../../etc/passwd".to_string())), "");
+        assert_eq!(sanitize_image_ext(&None), "");
+        assert_eq!(sanitize_image_ext(&Some("noext".to_string())), "");
     }
 }
