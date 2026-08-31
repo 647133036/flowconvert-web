@@ -71,6 +71,10 @@ pub async fn main_inner() {
             axum::routing::post(handler::convert::handle_pdf_to_office),
         )
         .route(
+            "/api/convert/pdf-to-markdown",
+            axum::routing::post(handler::convert::handle_pdf_to_markdown),
+        )
+        .route(
             "/api/convert/sketch",
             axum::routing::post(handler::convert::handle_sketch),
         )

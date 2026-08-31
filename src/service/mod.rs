@@ -12,7 +12,7 @@ pub use aiclient::AIClient;
 pub use vectorize::{vectorize, ToolAvailability, VecParams, detect_tools};
 pub use fetch::fetch_image;
 pub use translate::{translate_text, translate_file};
-pub use pdfoffice::pdf_to_office;
+pub use pdfoffice::{pdf_to_office, pdf_to_markdown};
 pub use sketch::make_sketch;
 pub use idphoto::make_id_photo;
 pub use imagegen::{make_image, make_edited_image, make_compose_image, make_image_ai, make_edited_image_ai, make_compose_image_ai};

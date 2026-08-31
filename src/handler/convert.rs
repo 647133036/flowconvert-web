@@ -419,6 +419,103 @@ pub async fn handle_pdf_to_office(
     }))).into_response()
 }
 
+/// POST /api/convert/pdf-to-markdown
+pub async fn handle_pdf_to_markdown(
+    State(app): State<AppState>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let cfg = &app.config;
+    let mut file_data: Option<Vec<u8>> = None;
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        match field.name().unwrap_or("") {
+            "file" => {
+                if let Ok(data) = field.bytes().await {
+                    if data.len() > 50 * 1024 * 1024 {
+                        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                            "success": false,
+                            "error": "文件超过 50MB 限制"
+                        }))).into_response();
+                    }
+                    file_data = Some(data.to_vec());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let data = match file_data {
+        Some(d) => d,
+        None => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "success": false,
+                "error": "请选择要上传的PDF文件"
+            }))).into_response();
+        }
+    };
+
+    if data.len() < 5 || !data.starts_with(b"%PDF-") {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "success": false,
+            "error": "仅支持PDF文件"
+        }))).into_response();
+    }
+
+    let tmp_dir = cfg.tmp_dir.join(format!("pdf2md_{}", new_id(8)));
+    std::fs::create_dir_all(&tmp_dir).ok();
+    let tmp_dir_clone = tmp_dir.clone();
+
+    let src_path = tmp_dir.join("upload.pdf");
+    if let Err(_) = std::fs::write(&src_path, &data) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "success": false,
+            "error": "服务器错误"
+        }))).into_response();
+    }
+
+    let result = match tokio::task::spawn_blocking(move || {
+        service::pdf_to_markdown(tmp_dir.to_str().unwrap(), src_path.to_str().unwrap())
+    })
+    .await {
+        Ok(Ok(path)) => path,
+        Ok(Err(e)) => {
+            tracing::error!("PDF转Markdown失败: {}", e);
+            let _ = std::fs::remove_dir_all(&tmp_dir_clone);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "success": false,
+                "error": "处理失败，请稍后重试"
+            }))).into_response();
+        }
+        Err(e) => {
+            tracing::error!("PDF转Markdown任务失败: {}", e);
+            let _ = std::fs::remove_dir_all(&tmp_dir_clone);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "success": false,
+                "error": "处理失败，请稍后重试"
+            }))).into_response();
+        }
+    };
+
+    let dl_url = match app.file_store.register(&result, "output.md") {
+        Ok(url) => url,
+        Err(e) => {
+            tracing::error!("保存Markdown文件失败: {}", e);
+            let _ = std::fs::remove_dir_all(&tmp_dir_clone);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                "success": false,
+                "error": "保存文件失败"
+            }))).into_response();
+        }
+    };
+
+    let _ = std::fs::remove_dir_all(&tmp_dir_clone);
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "success": true,
+        "download_url": dl_url,
+    }))).into_response()
+}
+
 /// POST /api/convert/sketch
 pub async fn handle_sketch(
     State(app): State<AppState>,
