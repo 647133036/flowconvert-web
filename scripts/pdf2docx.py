@@ -6,10 +6,11 @@ import fitz  # pymupdf
 from docx import Document
 from docx.shared import Pt
 
+from pp_ocr_onnx import ocr_pdf as ocr_pdf_func
+
 
 def extract_text_layer(pdf_path: str) -> str:
-    """尝试用 pdfminer/pymupdf 提取文本层"""
-    # 优先 pymupdf，文本层完整则直接用
+    """尝试用 pymupdf 提取文本层"""
     text_parts = []
     try:
         doc = fitz.open(pdf_path)
@@ -23,28 +24,7 @@ def extract_text_layer(pdf_path: str) -> str:
 
 def ocr_pdf(pdf_path: str, lang: str = "chi_sim+eng") -> str:
     """扫描版 PDF：每页渲染成图后 OCR"""
-    import pytesseract
-    text_parts = []
-    try:
-        doc = fitz.open(pdf_path)
-        for i, page in enumerate(doc):
-            # 渲染为较高 DPI 以提升 OCR 精度
-            pix = page.get_pixmap(dpi=300)
-            img_path = None
-            try:
-                import os
-                img_path = f"/tmp/_pdf2docx_ocr_{i}.png"
-                pix.save(img_path)
-                from PIL import Image
-                txt = pytesseract.image_to_string(Image.open(img_path), lang=lang)
-                text_parts.append(txt)
-            finally:
-                if img_path and os.path.exists(img_path):
-                    os.remove(img_path)
-        doc.close()
-    except Exception as e:
-        sys.stderr.write(f"OCR 失败: {e}\n")
-    return "\n".join(text_parts)
+    return ocr_pdf_func(pdf_path, lang)
 
 
 def text_to_docx(text: str, output_path: str) -> None:

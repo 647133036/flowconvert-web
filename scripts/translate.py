@@ -337,7 +337,7 @@ def translate_pdf(src_path, out_path, source, target):
     if len(raw_text.strip()) < 50:
         try:
             import fitz
-            import pytesseract
+            from pp_ocr_onnx import ocr_image
             from PIL import Image
             import io
 
@@ -346,8 +346,8 @@ def translate_pdf(src_path, out_path, source, target):
             for page in doc:
                 pix = page.get_pixmap(dpi=300)
                 img = Image.open(io.BytesIO(pix.tobytes("png")))
-                txt = pytesseract.image_to_string(img, lang="chi_sim+eng")
-                ocr_parts.append(txt)
+                txt = ocr_image(img)
+                ocr_parts.extend(txt)
             doc.close()
             raw_text = "\n\n".join(ocr_parts)
         except Exception as e:
