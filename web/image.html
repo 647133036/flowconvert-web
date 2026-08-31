@@ -585,7 +585,7 @@ function updateComposeBtn() {
   $('composeBtn').disabled = !composePrompt.value.trim();
 }
 
-() {
+async function generateTextImage() {
   if (isGenerating) return;
   isGenerating = true;
   showStatus('正在生成图像...');
@@ -594,13 +594,13 @@ function updateComposeBtn() {
     formData.append('prompt', $('textPrompt').value);
     formData.append('width', '512');
     formData.append('height', '512');
-    
+
     const resp = await fetch('/api/convert/image/text', {
       method: 'POST',
       body: formData
     });
     const data = await resp.json();
-    
+
     if (data.success) {
       $('resultImage').src = data.download_url;
       $('downloadLink').href = data.download_url;
@@ -608,12 +608,6 @@ function updateComposeBtn() {
     } else {
       showError(data.error || '生成失败');
     }
-  } catch (err) {
-    showError(err.message || '生成失败，请重试');
-  } finally {
-    isGenerating = false;
-  }
-}
   } catch (err) {
     showError(err.message || '生成失败，请重试');
   } finally {

@@ -92,8 +92,8 @@ pub async fn handle_translate(
     let _ = std::fs::remove_dir_all(&tmp_dir);
     (StatusCode::OK, Json(serde_json::json!({
         "success": true,
-        "text": result.text,
-        "detected": result.detected,
+        "translated_text": result.text,
+        "detected_language": result.detected,
         "engine": result.engine,
     }))).into_response()
 }
