@@ -712,9 +712,9 @@ pub async fn handle_id_photo(
         Ok(Err(e)) => {
             tracing::error!("证件照生成失败: {}", e);
             let _ = std::fs::remove_dir_all(&tmp_dir_clone);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            return (StatusCode::OK, Json(serde_json::json!({
                 "success": false,
-                "error": "处理失败，请稍后重试"
+                "error": e
             }))).into_response();
         }
         Err(e) => {

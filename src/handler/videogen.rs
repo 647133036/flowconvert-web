@@ -610,31 +610,19 @@ pub async fn handle_video_task_status(
         JobStatus::Failed => "failed",
     };
 
-    let resp = serde_json::json!({
+    let mut resp = serde_json::json!({
         "id": job.id,
         "status": status_str,
     });
-    let resp = if let Some(ref url) = job.download_url {
-        serde_json::json!({
-            "id": job.id,
-            "status": status_str,
-            "download_url": url,
-        })
-    } else if let Some(ref err) = job.error {
-        serde_json::json!({
-            "id": job.id,
-            "status": status_str,
-            "error": err,
-        })
-    } else if let Some(ref notice) = job.notice {
-        serde_json::json!({
-            "id": job.id,
-            "status": status_str,
-            "notice": notice,
-        })
-    } else {
-        resp
-    };
+    if let Some(ref url) = job.download_url {
+        resp["download_url"] = serde_json::Value::String(url.clone());
+    }
+    if let Some(ref err) = job.error {
+        resp["error"] = serde_json::Value::String(err.clone());
+    }
+    if let Some(ref notice) = job.notice {
+        resp["notice"] = serde_json::Value::String(notice.clone());
+    }
 
     (StatusCode::OK, Json(resp)).into_response()
 }
