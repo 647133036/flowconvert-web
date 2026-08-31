@@ -221,24 +221,6 @@ async fn test_options_api_formats() {
 }
 
 #[tokio::test]
-async fn test_post_translate_json_returns_415() {
-    let app = make_app();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/translate")
-                .header("Content-Type", "application/json")
-                .body(Body::from(r#"{"text":"hello","source":"en","target":"zh"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    // Form extractor returns 415 for non-form content type
-    assert_eq!(resp.status(), 415);
-}
-
-#[tokio::test]
 async fn test_post_convert_url_missing_param_returns_400() {
     let app = make_app();
     let resp = app

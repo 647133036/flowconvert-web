@@ -1,6 +1,6 @@
-use axum::extract::{Form, Multipart, State};
-use axum::http::{header, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::extract::{Json as AxumJson, Multipart, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 
@@ -49,7 +49,7 @@ pub fn validate_translate_params(text: &str, source: &str, target: &str) -> Resu
 
 pub async fn handle_translate(
     State(app): State<AppState>,
-    Form(form): Form<TranslateForm>,
+    AxumJson(form): AxumJson<TranslateForm>,
 ) -> impl IntoResponse {
     let cfg = &app.config;
     if let Err(msg) = validate_translate_params(&form.text, &form.source, &form.target) {
@@ -215,28 +215,25 @@ pub async fn handle_translate_file(
         }
     };
 
-    let content = match std::fs::read(&result) {
-        Ok(c) => c,
-        Err(_) => {
+    let _ = std::fs::remove_dir_all(&tmp_dir_clone);
+
+    let dl_url = match app.file_store.register(&result, &format!("translated.{}", ext)) {
+        Ok(url) => url,
+        Err(e) => {
+            tracing::error!("保存翻译文件失败: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
-                "error": "读取结果文件失败"
+                "error": "保存文件失败"
             }))).into_response();
         }
     };
 
-    let _ = std::fs::remove_dir_all(&tmp_dir_clone);
-
-    let content_type = mime_guess::from_path(&result).first_or_octet_stream().to_string();
-    let disp = format!("attachment; filename=\"translated.{}\"", ext);
-
-    let mut res = Response::new(axum::body::Body::from(content));
-    res.headers_mut().insert(header::CONTENT_TYPE, content_type.parse().unwrap());
-    res.headers_mut().insert(
-        header::CONTENT_DISPOSITION,
-        disp.parse().unwrap(),
-    );
-    res
+    (StatusCode::OK, Json(serde_json::json!({
+        "success": true,
+        "download_url": dl_url,
+        "original_name": fname,
+        "output_name": format!("translated.{}", ext),
+    }))).into_response()
 }
 
 #[cfg(test)]

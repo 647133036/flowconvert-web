@@ -443,7 +443,7 @@
 </main>
 
 <footer class="footer">
-  <p>FlowConvert &copy; 2026 · 基于 Go + OpenCode 构建 · 反馈：647133036@qq.com</p>
+  <p>FlowConvert &copy; 2026 · 基于 Rust + OpenCode 构建 · 反馈：647133036@qq.com</p>
 </footer>
 
 <script>
@@ -525,20 +525,10 @@ document.addEventListener('DOMContentLoaded', () => {
     editBtn.addEventListener('click', generateEditImage);
   }
 
-  // Compose mode: delegate click on ref cards to open file picker, and
-  // handle change events via delegation so re-rendered cards keep working.
-  const refGrid = document.querySelector('.ref-grid');
-  if (refGrid) {
-    refGrid.addEventListener('click', e => {
-      const card = e.target.closest('.ref-card');
-      if (!card) return;
-      const input = card.querySelector('input[type="file"]');
-      if (input) input.click();
-    });
-    refGrid.addEventListener('change', e => {
-      if (e.target.matches('input[type="file"].ref-input')) handleRefUpload(e);
-    });
-  }
+  // Compose mode
+  document.querySelectorAll('.ref-input').forEach(input => {
+    input.addEventListener('change', e => handleRefUpload(e));
+  });
   
   const composePrompt = $('composePrompt');
   const composeBtn = $('composeBtn');
@@ -584,20 +574,18 @@ function handleRefUpload(e) {
   reader.onload = ev => {
     const card = document.getElementById('refCard' + (idx + 1));
     card.classList.add('has-image');
-    // Rebuild card keeping the file input with its data-index so the click &
-    // change delegates (bound on .ref-grid) keep working for re-uploads.
-    card.innerHTML = '<img src="' + ev.target.result + '"><input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="' + idx + '"><span class="ref-label">' + (idx + 1) + '</span>';
+    card.innerHTML = `<img src="${ev.target.result}"><span class="ref-label">${idx + 1}</span>`;
+    card.querySelector('input').addEventListener('change', handleRefUpload);
   };
   reader.readAsDataURL(file);
-  const cp = $('composePrompt');
-  if (cp) $('composeBtn').disabled = !cp.value.trim();
+  updateComposeBtn();
 }
 
 function updateComposeBtn() {
   $('composeBtn').disabled = !composePrompt.value.trim();
 }
 
-async function generateTextImage() {
+() {
   if (isGenerating) return;
   isGenerating = true;
   showStatus('正在生成图像...');
@@ -614,13 +602,18 @@ async function generateTextImage() {
     const data = await resp.json();
     
     if (data.success) {
-      const url = data.download_url;
-      $('resultImage').src = url;
-      $('downloadLink').href = url;
+      $('resultImage').src = data.download_url;
+      $('downloadLink').href = data.download_url;
       showResult('图像生成成功！');
     } else {
       showError(data.error || '生成失败');
     }
+  } catch (err) {
+    showError(err.message || '生成失败，请重试');
+  } finally {
+    isGenerating = false;
+  }
+}
   } catch (err) {
     showError(err.message || '生成失败，请重试');
   } finally {
