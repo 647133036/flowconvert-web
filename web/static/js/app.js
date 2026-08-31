@@ -1,5 +1,5 @@
 // ── State ──
-let currentMode = 'image'; // image | pdf | sketch
+let currentMode = 'image'; // image | pdf
 let currentInput = 'upload'; // upload | url
 let selectedFile = null;
 let selectedFormat = null;
@@ -80,9 +80,6 @@ document.addEventListener('DOMContentLoaded', () => {
   els.urlInput.addEventListener('keydown', e => {
     if (e.key === 'Enter') startConvert();
   });
-
-  // Fetch button for URL
-  els.fetchBtn.addEventListener('click', startConvert);
 
   // Format change
   els.outputFormat.addEventListener('change', updateConvertBtn);
@@ -180,29 +177,14 @@ function handlePdfSelect(file) {
   els.pdfConvertBtn.disabled = false;
 }
 
-function handleSketchSelect(file) {
-  sketchFile = file;
-  els.sketchDropZone.querySelector('.drop-content').innerHTML = `
-    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="1.5">
-      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-      <polyline points="14 2 14 8 20 8"/>
-    </svg>
-    <p style="color: #22c55e;">${file.name}</p>
-    <p class="hint">${(file.size / 1024 / 1024).toFixed(2)} MB</p>
-  `;
-  els.sketchConvertBtn.disabled = false;
-}
-
 // ── Button state ──
 
 function updateConvertBtn() {
   if (currentMode === 'image') {
     if (currentInput === 'upload') {
       els.convertBtn.disabled = !selectedFile;
-      els.fetchBtn.disabled = true;
     } else {
       els.convertBtn.disabled = !els.urlInput.value.trim();
-      els.fetchBtn.disabled = !els.urlInput.value.trim();
     }
   }
 }
@@ -291,6 +273,19 @@ async function startPdfConvert() {
 
 // ── Sketch conversion ──
 
+function handleSketchSelect(file) {
+  sketchFile = file;
+  els.sketchDropZone.querySelector('.drop-content').innerHTML = `
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="1.5">
+      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+      <polyline points="14 2 14 8 20 8"/>
+    </svg>
+    <p style="color: #22c55e;">${file.name}</p>
+    <p class="hint">${(file.size / 1024 / 1024).toFixed(2)} MB</p>
+  `;
+  els.sketchConvertBtn.disabled = false;
+}
+
 async function startSketchConvert() {
   if (isConverting || !sketchFile) return;
   isConverting = true;
@@ -346,6 +341,7 @@ function showResult(downloadUrl, format) {
   els.resultText.textContent = `转换成功！文件格式: .${format}`;
   els.resultText.style.color = '';
 
+  // 直接用 Rust 后端的 /api/download/ 路由下载
   const url = downloadUrl + (downloadUrl.includes('?') ? '&' : '?') + '_dl=' + Date.now();
 
   const isWechat = /MicroMessenger|wxwork/i.test(navigator.userAgent);
@@ -355,8 +351,10 @@ function showResult(downloadUrl, format) {
   els.downloadLink.style.display = 'inline-flex';
 
   if (isWechat) {
+    // 微信浏览器：点击后打开系统浏览器下载
     els.downloadLink.target = '_blank';
   } else {
+    // 普通浏览器：直接导航（最快）
     els.downloadLink.target = '_self';
   }
 }
@@ -384,7 +382,6 @@ function resetAll() {
   hideResult();
   selectedFile = null;
   selectedFormat = null;
-  sketchFile = null;
 
   // Reset drop zones
   els.dropZone.querySelector('.drop-content').innerHTML = `
@@ -408,16 +405,6 @@ function resetAll() {
     <p class="hint">支持 PDF 格式</p>
   `;
 
-  els.sketchDropZone.querySelector('.drop-content').innerHTML = `
-    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5">
-      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-      <polyline points="17 8 12 3 7 8"/>
-      <line x1="12" y1="3" x2="12" y2="15"/>
-    </svg>
-    <p>拖拽照片到此处，或 <span class="link">点击选择</span></p>
-    <p class="hint">支持 JPG / PNG / BMP / WebP，自动转为铅笔素描风格</p>
-  `;
-
   els.urlInput.value = '';
   els.inputFormat.value = 'auto';
   els.outputFormat.value = 'svg';
@@ -425,7 +412,6 @@ function resetAll() {
   els.pdfOutputFormat.disabled = true;
   els.convertBtn.disabled = true;
   els.pdfConvertBtn.disabled = true;
-  els.sketchConvertBtn.disabled = true;
   els.downloadLink.style.display = 'inline-flex';
   els.resultText.style.color = '';
 }
