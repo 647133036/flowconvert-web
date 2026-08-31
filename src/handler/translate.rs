@@ -215,18 +215,18 @@ pub async fn handle_translate_file(
         }
     };
 
-    let _ = std::fs::remove_dir_all(&tmp_dir_clone);
-
     let dl_url = match app.file_store.register(&result, &format!("translated.{}", ext)) {
         Ok(url) => url,
         Err(e) => {
-            tracing::error!("保存翻译文件失败: {}", e); tracing::error!("result path: {}", result);
+            tracing::error!("保存翻译文件失败: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
                 "error": "保存文件失败"
             }))).into_response();
         }
     };
+
+    let _ = std::fs::remove_dir_all(&tmp_dir_clone);
 
     (StatusCode::OK, Json(serde_json::json!({
         "success": true,
