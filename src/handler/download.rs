@@ -35,7 +35,6 @@ pub async fn handle_download(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_path_traversal_rejected() {

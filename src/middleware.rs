@@ -26,7 +26,7 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
         ("X-XSS-Protection", "1; mode=block"),
         (
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'",
         ),
         ("Access-Control-Allow-Origin", "*"),
         ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
@@ -169,7 +169,7 @@ pub fn client_ip(req: &Request) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::{HeaderValue, Request};
+    use axum::http::Request;
     use std::net::{IpAddr, SocketAddr};
 
     fn make_request(peer_ip: &str, xff: Option<&str>, x_real_ip: Option<&str>) -> Request<axum::body::Body> {
@@ -304,8 +304,9 @@ mod tests {
         assert_eq!(headers.get("X-Frame-Options").unwrap(), "DENY");
         assert_eq!(headers.get("X-XSS-Protection").unwrap(), "1; mode=block");
         let csp = headers.get("Content-Security-Policy").unwrap().to_str().unwrap();
-        assert!(csp.contains("script-src 'self'"));
-        assert!(!csp.contains("'unsafe-inline'"));
+        assert!(csp.contains("script-src 'self' 'unsafe-inline'"));
+        assert!(csp.contains("style-src 'self' 'unsafe-inline'"));
+        assert!(csp.contains("img-src 'self' data: https: blob:"));
     }
 }
 
