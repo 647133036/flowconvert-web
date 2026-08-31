@@ -67,7 +67,12 @@ fn make_app() -> Router {
             "/api/download/{*name}",
             get(flowconvert::handler::download::handle_download),
         )
-        .route("/api/convert/image/text", post(flowconvert::handler::imagegen::handle_text_image));
+        .route("/api/convert/image/text", post(flowconvert::handler::imagegen::handle_text_image))
+        .route("/api/convert/image/edit", post(flowconvert::handler::imagegen::handle_edit_image))
+        .route("/api/convert/image/compose", post(flowconvert::handler::imagegen::handle_compose_image))
+        .route("/api/convert/video/text", post(flowconvert::handler::videogen::handle_text_video))
+        .route("/api/convert/sketch", post(flowconvert::handler::convert::handle_sketch))
+        .route("/api/convert/pdf-to-office", post(flowconvert::handler::convert::handle_pdf_to_office));
 
     Router::new()
         .merge(api)
@@ -324,6 +329,99 @@ async fn test_post_convert_image_text_empty_prompt_returns_400() {
                 .uri("/api/convert/image/text")
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .body(Body::from("prompt=&width=100&height=100"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_post_convert_image_edit_missing_params_returns_400() {
+    let app = make_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/convert/image/edit")
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .body(Body::from(""))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_post_convert_image_compose_missing_params_returns_400() {
+    let app = make_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/convert/image/compose")
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .body(Body::from(""))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_post_convert_video_text_missing_prompt_returns_400() {
+    let app = make_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/convert/video/text")
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .body(Body::from("prompt=&duration=5"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_post_convert_sketch_empty_file_returns_400() {
+    let app = make_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/convert/sketch")
+                .header("Content-Type", "multipart/form-data; boundary=----WebKitFormBoundary")
+                .body(Body::from(
+                    "------WebKitFormBoundary\r\n\
+                     Content-Disposition: form-data; name=\"file\"; filename=\"\"\r\n\r\n\
+                     ------WebKitFormBoundary--\r\n",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_post_convert_pdf_to_office_empty_file_returns_400() {
+    let app = make_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/convert/pdf-to-office")
+                .header("Content-Type", "multipart/form-data; boundary=----WebKitFormBoundary")
+                .body(Body::from(
+                    "------WebKitFormBoundary\r\n\
+                     Content-Disposition: form-data; name=\"file\"; filename=\"\"\r\n\r\n\
+                     ------WebKitFormBoundary--\r\n",
+                ))
                 .unwrap(),
         )
         .await
