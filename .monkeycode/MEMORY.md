@@ -121,4 +121,8 @@ Entries discovered by the Agent during task execution should follow this format:
 - Python 3 + pip 包: pandas, openpyxl, python-docx, pdf2docx, Pillow, translatepy
 - ONNX Runtime (用于证件照抠图模型)
 - Tesseract OCR (chi_sim+eng) 用于 PDF 扫描件翻译
+- 统一 OCR 模块: scripts/pp_ocr_onnx.py, 支持 Tesseract/EasyOCR/PP-OCR 三种引擎，默认 Tesseract
+- PP-OCR ONNX 模型在 models/ocr/: det.onnx (检测), rec.onnx (识别), ppocr_keys_v1.txt (词表6622字符)
+- PP-OCR rec 模型预处理: resize height=48, normalize (x/255 - 0.5)/0.5, CTC decode with blank at end
+- EasyOCR 安装: pip install easyocr (需下载~600MB模型)
 - 翻译服务：translatepy (Google/DeepL/MyMemory/TranslateCom 自动切换，无需 API Key)
