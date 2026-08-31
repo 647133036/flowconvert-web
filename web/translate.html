@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>在线翻译 - FlowConvert</title>
-<link rel="stylesheet" href="/static/css/style.css">
+<link rel="stylesheet" href="/static/css/style.css?v=3">
 <style>
   .translate-card h1 {
     background: linear-gradient(135deg, var(--primary), var(--accent));
@@ -125,8 +125,8 @@
       <div id="fileInfo" class="file-info">
         <span class="file-icon">📄</span>
         <div class="file-details">
-          <div class="file-name" id="fileName">document.pdf</div>
-          <div class="file-size" id="fileSize">1.2 MB</div>
+          <div class="file-name" id="fileName"></div>
+          <div class="file-size" id="fileSize"></div>
         </div>
         <span class="file-remove" id="fileRemove" title="移除文件">✕</span>
       </div>
@@ -134,12 +134,12 @@
       <!-- 进度 -->
       <div id="fileProgress" class="file-translate-progress">
         <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
-        <div class="progress-text" id="progressText">正在翻译...</div>
+        <div class="progress-text" id="progressText"></div>
       </div>
 
       <!-- 结果 -->
       <div id="fileResult" class="file-result">
-        <div class="result-msg">✅ 翻译完成</div>
+        <div class="result-msg"></div>
         <a id="downloadLink" class="btn btn-primary btn-download" href="#" download>⬇ 下载翻译结果</a>
       </div>
 
@@ -153,7 +153,7 @@
 </main>
 
 <footer class="footer">
-  <p>FlowConvert &copy; 2026 · 基于 Rust + OpenCode 构建 · 反馈：647133036@qq.com · <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">桂ICP备XXXXXX号-X</a> · <a href="https://beian.mps.gov.cn/#/query/webSearch?code=桂公网安备XXXXXXXXXXXXXXX号" target="_blank" rel="noopener noreferrer">桂公网安备XXXXXXXXXXXXXXX号</a></p>
+  <p>FlowConvert &copy; 2026 · 基于 Rust + OpenCode 构建 · 反馈：647133036@qq.com · <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">桂ICP备2026011583号-1</a> · <a href="https://beian.mps.gov.cn/#/query/webSearch?code=桂公网安备45032302000244号" target="_blank" rel="noopener noreferrer">桂公网安备45032302000244号</a></p>
 </footer>
 
 <script>

@@ -308,11 +308,10 @@ def find_cjk_font():
 
 
 def translate_pdf(src_path, out_path, source, target):
-    """OCR 识别 PDF → 翻译 → 生成新 PDF（支持图片/PDF 扫描件）"""
+    """翻译 PDF：先提取文字层，文字过少时降级为 OCR（Tesseract）"""
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
 
-    # 注册 CJK 字体
     cjk_font_path = find_cjk_font()
     font_name = "CJKFont"
     if cjk_font_path:
@@ -323,33 +322,40 @@ def translate_pdf(src_path, out_path, source, target):
     else:
         font_name = "Helvetica"
 
-    # 尝试 OCR 方案
+    # 第一步：用 pymupdf 提取文字层
+    raw_text = ""
     try:
-        from pdf2image import convert_from_path
-        import pytesseract
+        import fitz
+        doc = fitz.open(src_path)
+        for page in doc:
+            raw_text += page.get_text() + "\n\n"
+        doc.close()
+    except Exception:
+        pass
 
-        images = convert_from_path(src_path, dpi=300)
-        if not images:
-            raise RuntimeError("PDF 无法转换为图像")
-
-        translated_lines = []
-        for i, img in enumerate(images):
-            custom_config = r'--oem 3 --psm 6 lang=chi_sim+eng'
-            text = pytesseract.image_to_string(img, config=custom_config)
-            translated, _, _ = translate_text(text, source, target)
-            translated_lines.append(translated)
-
-        full_text = "\n\n".join(translated_lines)
-
-    except (ImportError, RuntimeError):
-        # 回退：pdfminer 提取文本
+    # 第二步：文字层过少时降级 OCR
+    if len(raw_text.strip()) < 50:
         try:
-            from pdfminer.high_level import extract_text
-            text = extract_text(src_path)
-            translated, _, _ = translate_text(text, source, target)
-            full_text = translated
-        except Exception:
-            full_text = ""
+            import fitz
+            import pytesseract
+            from PIL import Image
+            import io
+
+            doc = fitz.open(src_path)
+            ocr_parts = []
+            for page in doc:
+                pix = page.get_pixmap(dpi=300)
+                img = Image.open(io.BytesIO(pix.tobytes("png")))
+                txt = pytesseract.image_to_string(img, lang="chi_sim+eng")
+                ocr_parts.append(txt)
+            doc.close()
+            raw_text = "\n\n".join(ocr_parts)
+        except Exception as e:
+            sys.stderr.write(f"OCR 降级失败: {e}\n")
+
+    # 第三步：翻译
+    translated, _, _ = translate_text(raw_text, source, target)
+    full_text = translated
 
     # 生成 PDF
     from reportlab.lib.pagesizes import A4
@@ -371,11 +377,6 @@ def translate_pdf(src_path, out_path, source, target):
 
     c.save()
     return out_path
-    fallback = out_path.rsplit(".", 1)[0] + ".txt"
-    with open(fallback, "w", encoding="utf-8") as f:
-        f.write("翻译结果（PDF 转译失败，输出为文本）：\n\n")
-        f.write(text if 'text' in dir() else "")
-    return fallback
 
 
 TRANSLATORS = {
