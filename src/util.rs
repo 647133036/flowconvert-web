@@ -1,31 +1,27 @@
 use std::fmt::Write as FmtWrite;
 use std::io::Read;
 use std::path::Path;
-use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-static SEED_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 pub fn new_id(n: usize) -> String {
+    let uuid = uuid::Uuid::new_v4();
+    let bytes = uuid.as_bytes();
     let mut buf = String::with_capacity(n * 2);
-    for _ in 0..n {
-        let byte: u8 = rand_byte();
-        write!(&mut buf, "{:02x}", byte).unwrap();
+    for i in 0..n {
+        write!(&mut buf, "{:02x}", bytes[i % 16]).unwrap();
     }
     buf
-}
-
-fn rand_byte() -> u8 {
-    let val = SEED_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
-    ((val ^ (val >> 16)) & 0xFF) as u8
 }
 
 pub fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
     let mut in_file = std::fs::File::open(src)?;
     let mut out_file = std::fs::File::create(dst)?;
-    std::io::copy(&mut in_file, &mut out_file)?;
+    if let Err(e) = std::io::copy(&mut in_file, &mut out_file) {
+        let _ = std::fs::remove_file(dst);
+        return Err(e);
+    }
     out_file.sync_all()
 }
 
@@ -39,8 +35,8 @@ pub struct CmdResult {
 pub fn run_cmd_timeout(timeout: Duration, program: &str, args: &[&str]) -> CmdResult {
     let mut cmd = Command::new(program);
     cmd.args(args);
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -53,66 +49,96 @@ pub fn run_cmd_timeout(timeout: Duration, program: &str, args: &[&str]) -> CmdRe
         }
     };
 
-    let mut stdout_buf = Vec::new();
-    let mut done = false;
-    let mut exit_code = None;
-    let mut last_err: Option<String> = None;
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
+
     let start = Instant::now();
+    let mut stdout_buf = Vec::new();
+    let mut stderr_buf = Vec::new();
+    let mut exit_code = None;
 
-    while !done {
-        if start.elapsed() > timeout {
-            let _ = child.kill();
-            return CmdResult {
-                stdout: String::new(),
-                exit_code: None,
-                error: Some(format!("命令超时（{}）", timeout.as_secs())),
-            };
-        }
-        thread::sleep(Duration::from_millis(50));
-
-        if let Ok(status) = child.try_wait() {
-            if let Some(s) = status {
-                exit_code = s.code();
-                done = true;
-            }
-        }
-
-        if let Some(ref mut handle) = child.stdout {
+    // Spawn reader threads to avoid deadlocks from full pipe buffers
+    let stdout_thread = stdout_handle.map(|mut h| {
+        thread::spawn(move || {
             let mut buf = vec![0u8; 4096];
+            let mut total = Vec::new();
             loop {
-                match handle.read(&mut buf) {
+                match h.read(&mut buf) {
                     Ok(0) => break,
-                    Ok(n) => stdout_buf.extend_from_slice(&buf[..n]),
+                    Ok(n) => total.extend_from_slice(&buf[..n]),
                     Err(_) => break,
                 }
             }
+            total
+        })
+    });
+
+    let stderr_thread = stderr_handle.map(|mut h| {
+        thread::spawn(move || {
+            let mut buf = vec![0u8; 4096];
+            let mut total = Vec::new();
+            loop {
+                match h.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => total.extend_from_slice(&buf[..n]),
+                    Err(_) => break,
+                }
+            }
+            total
+        })
+    });
+
+    loop {
+        if start.elapsed() > timeout {
+            let _ = child.kill();
+            if let Some(t) = stdout_thread {
+                if let Ok(buf) = t.join() { stdout_buf = buf; }
+            }
+            if let Some(t) = stderr_thread {
+                if let Ok(buf) = t.join() { stderr_buf = buf; }
+            }
+            let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
+            let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
+            return CmdResult {
+                stdout,
+                exit_code: None,
+                error: Some(format!("命令超时（{}s），stderr: {}", timeout.as_secs(), stderr.trim_end())),
+            };
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                exit_code = status.code();
+                break;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(_) => break,
         }
     }
 
-    // Final read to capture remaining output
-    if let Some(mut handle) = child.stdout.take() {
-        let mut buf = vec![0u8; 4096];
-        loop {
-            match handle.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => stdout_buf.extend_from_slice(&buf[..n]),
-                Err(_) => break,
-            }
-        }
+    // Join reader threads to get remaining output
+    if let Some(t) = stdout_thread {
+        if let Ok(buf) = t.join() { stdout_buf = buf; }
     }
+    if let Some(t) = stderr_thread {
+        if let Ok(buf) = t.join() { stderr_buf = buf; }
+    }
+
+    let _ = child.wait();
 
     let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
-    if let Some(code) = exit_code {
+    let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
+    let error = if let Some(code) = exit_code {
         if code != 0 {
-            last_err = Some(format!("exit code {}", code));
+            Some(format!("exit code {}，stderr: {}", code, stderr.trim_end()))
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
-    CmdResult {
-        stdout,
-        exit_code,
-        error: last_err,
-    }
+    CmdResult { stdout, exit_code, error }
 }
 
 pub fn run_cmd(program: &str, args: &[&str]) -> CmdResult {
@@ -228,6 +254,8 @@ pub fn safe_ext(ext: &str) -> String {
         "pdf", "doc", "docx", "xls", "xlsx", "csv", "txt", "rtf", "odt", "ods", "odp",
         // Images
         "jpg", "jpeg", "png", "bmp", "gif", "webp", "svg", "tiff", "tif", "eps",
+        // Vector graphics (AI, DXF, SK, FIG)
+        "ai", "dxf", "sk", "fig",
         // Audio/Video
         "mp4", "mov", "avi", "mkv", "webm", "mp3", "wav", "ogg", "flac",
         // Archive
@@ -257,8 +285,7 @@ mod tests {
     #[test]
     fn test_new_id_no_duplicates() {
         let mut ids = std::collections::HashSet::new();
-        // SEED_COUNTER wraps at 256 unique byte values; test within safe range
-        // Use 128 iterations (well under 256) to avoid wrap-around collisions
+        // UUID v4 is crypto-random; test within safe range to verify uniqueness
         for _ in 0..32 {
             let id = new_id(8);
             assert!(ids.insert(id), "duplicate id found");
@@ -303,6 +330,10 @@ mod tests {
         assert_eq!(safe_ext("mp4"), "mp4");
         assert_eq!(safe_ext("zip"), "zip");
         assert_eq!(safe_ext("svg"), "svg");
+        assert_eq!(safe_ext("ai"), "ai");
+        assert_eq!(safe_ext("dxf"), "dxf");
+        assert_eq!(safe_ext("sk"), "sk");
+        assert_eq!(safe_ext("fig"), "fig");
         // Not whitelisted
         assert_eq!(safe_ext("exe"), "");
         assert_eq!(safe_ext("sh"), "");
@@ -319,20 +350,9 @@ mod tests {
         // Short timeout command should return timeout error
         let result = run_cmd_timeout(Duration::from_millis(100), "sleep", &["5"]);
         assert!(result.error.is_some());
+        // Timeout should still capture any stdout read before kill
+        // (sleep produces no output, so stdout should be empty)
         assert!(result.stdout.is_empty());
-        // Should contain timeout message
         assert!(result.error.as_ref().unwrap().contains("超时"));
-    }
-
-    #[test]
-    fn test_atomic_counter_wraps() {
-        // SEED_COUNTER wraps at u64::MAX, verify it increments safely
-        use super::SEED_COUNTER;
-        let before = SEED_COUNTER.load(std::sync::atomic::Ordering::Relaxed);
-        let after = SEED_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        assert_eq!(after, before);
-        // Verify no overflow panic on wrap-around by testing the modular arithmetic
-        let wrapped = (u64::MAX - 5).wrapping_add(10);
-        assert!(wrapped < 10); // wraps around
     }
 }

@@ -525,8 +525,18 @@ pub fn validate_download_url(raw: &str) -> Result<(), String> {
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         let is_loopback = ip.is_loopback() || ip.is_unspecified();
         let is_private_or_link_local = match ip {
-            std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
-            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unicast_link_local(),
+            std::net::IpAddr::V4(v4) => {
+                v4.is_private() || v4.is_link_local() || v4.is_multicast()
+                    || ({ let o = v4.octets(); o[0] == 100 && (o[1] as u8) >= 64 && (o[1] as u8) <= 127 })
+                    || ({ let o = v4.octets(); o[0] == 192 && o[1] == 0 && o[2] == 0 })
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback() || v6.is_unicast_link_local()
+                    // IPv4-mapped (::ffff:x.x.x.x)
+                    || (v6.segments()[0] == 0 && v6.segments()[1] == 0
+                        && v6.segments()[2] == 0 && v6.segments()[3] == 0
+                        && v6.segments()[4] == 0 && v6.segments()[5] == 0xFFFF)
+            }
         };
         if is_loopback || is_private_or_link_local {
             return Err("禁止下载内网/回环地址资源".to_string());

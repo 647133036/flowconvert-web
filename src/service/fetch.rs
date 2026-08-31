@@ -12,11 +12,23 @@ use crate::util::new_id;
 fn is_safe_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
-            !v4.is_loopback() && !v4.is_private() && !v4.is_link_local() && !v4.is_unspecified()
+            !v4.is_loopback()
+                && !v4.is_private()
+                && !v4.is_link_local()
+                && !v4.is_unspecified()
+                && !v4.is_multicast()
+                // CGNAT (100.64.0.0/10): first octet = 100, second = 64..=127
+                && !({ let o = v4.octets(); o[0] == 100 && (o[1] as u8) >= 64 && (o[1] as u8) <= 127 })
+                // 192.0.0.0/24
+                && !({ let o = v4.octets(); o[0] == 192 && o[1] == 0 && o[2] == 0 })
         }
         IpAddr::V6(v6) => {
-            // Reject loopback, unspecified, link-local (fe80::/10),
-            // documentation (2001:db8::/32), and multicast
+            // Reject IPv4-mapped (::ffff:x.x.x.x)
+            if v6.segments()[0] == 0 && v6.segments()[1] == 0
+                && v6.segments()[2] == 0 && v6.segments()[3] == 0
+                && v6.segments()[4] == 0 && v6.segments()[5] == 0xFFFF {
+                return false;
+            }
             !v6.is_loopback()
                 && !v6.is_unspecified()
                 && !(v6.segments()[0] & 0xFC00 == 0xFC00)
