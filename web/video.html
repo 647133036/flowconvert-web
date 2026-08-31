@@ -168,35 +168,6 @@
   left: 0;
   color: var(--success);
 }
-.progress-bar {
-  height: 6px;
-  background: var(--border);
-  border-radius: 3px;
-  overflow: hidden;
-  margin: 12px 0 4px;
-}
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--primary), var(--success));
-  border-radius: 3px;
-  transition: width 0.5s ease;
-  width: 0%;
-}
-.progress-text {
-  font-size: 0.8rem;
-  color: var(--muted);
-  text-align: center;
-  margin: 0;
-}
-.result-notice {
-  padding: 10px 12px;
-  background: #fef3c7;
-  border: 1px solid #fcd34d;
-  border-radius: var(--radius-sm);
-  color: #92400e;
-  font-size: 0.85rem;
-  margin: 8px 0;
-}
 </style>
 </head>
 <body>
@@ -334,10 +305,6 @@
   <div id="status" class="status-panel" hidden>
     <div class="spinner"></div>
     <p id="statusText">正在生成视频...</p>
-    <div id="progressBar" class="progress-bar" hidden>
-      <div id="progressFill" class="progress-fill"></div>
-    </div>
-    <p id="progressText" class="progress-text" hidden></p>
   </div>
 
   <!-- 结果区 -->
@@ -394,13 +361,13 @@ document.addEventListener('DOMContentLoaded', () => {
   els.lastFrameInput = $('lastFrameInput');
   els.keyframePrompt = $('keyframePrompt');
   els.kfDurationSlider = $('kfDurationSlider');
-  els.kfDurationValue = $('kfDurationValue');
+  els.kfDurationValue = $('durationValue');
   els.keyframeGenerateBtn = $('keyframeGenerateBtn');
   
   els.refPrompt = $('refPrompt');
   els.refType = $('refType');
   els.refDurationSlider = $('refDurationSlider');
-  els.refDurationValue = $('refDurationValue');
+  els.refDurationValue = $('durationValue');
   els.refGenerateBtn = $('refGenerateBtn');
   
   els.status = $('status');
@@ -521,15 +488,29 @@ els.refPrompt?.addEventListener('input', updateRefBtn);
 async function generateTextVideo() {
   if (isGenerating) return;
   isGenerating = true;
-  showStatus('正在提交任务...', 0);
+  showStatus('正在生成视频，请稍候...');
   try {
     const formData = new FormData();
     formData.append('prompt', els.textPrompt.value);
     formData.append('duration', els.durationSlider.value);
     formData.append('resolution', els.textResolution.value);
-    await submitVideoTask('/api/convert/video/text', formData);
+    
+    const resp = await fetch('/api/convert/video/text', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await resp.json();
+    
+    if (data.success) {
+      const url = '/api/download/' + data.download_url.split('/').pop();
+      $('resultVideo').src = url;
+      $('downloadLink').href = url;
+      showResult('视频生成成功！');
+    } else {
+      showError(data.error || '生成失败');
+    }
   } catch (err) {
-    showError(err.message || '提交任务失败，请重试');
+    showError(err.message || '生成失败，请重试');
   } finally {
     isGenerating = false;
   }
@@ -538,16 +519,30 @@ async function generateTextVideo() {
 async function generateKeyframeVideo() {
   if (isGenerating) return;
   isGenerating = true;
-  showStatus('正在提交任务...', 0);
+  showStatus('正在生成视频...');
   try {
     const formData = new FormData();
     formData.append('first_frame', firstFrameFile);
     formData.append('last_frame', lastFrameFile);
     formData.append('prompt', els.keyframePrompt.value);
     formData.append('duration', els.kfDurationSlider.value);
-    await submitVideoTask('/api/convert/video/keyframe', formData);
+    
+    const resp = await fetch('/api/convert/video/keyframe', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await resp.json();
+    
+    if (data.success) {
+      const url = '/api/download/' + data.download_url.split('/').pop();
+      $('resultVideo').src = url;
+      $('downloadLink').href = url;
+      showResult('视频生成成功！');
+    } else {
+      showError(data.error || '生成失败');
+    }
   } catch (err) {
-    showError(err.message || '提交任务失败，请重试');
+    showError(err.message || '生成失败，请重试');
   } finally {
     isGenerating = false;
   }
@@ -556,7 +551,7 @@ async function generateKeyframeVideo() {
 async function generateRefVideo() {
   if (isGenerating) return;
   isGenerating = true;
-  showStatus('正在提交任务...', 0);
+  showStatus('正在生成视频...');
   try {
     const formData = new FormData();
     formData.append('prompt', els.refPrompt.value);
@@ -565,151 +560,38 @@ async function generateRefVideo() {
     refFiles.forEach((file, idx) => {
       if (file) formData.append('ref_' + idx, file);
     });
-    await submitVideoTask('/api/convert/video/ref', formData);
+    
+    const resp = await fetch('/api/convert/video/ref', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await resp.json();
+    
+    if (data.success) {
+      const url = '/api/download/' + data.download_url.split('/').pop();
+      $('resultVideo').src = url;
+      $('downloadLink').href = url;
+      showResult('视频生成成功！');
+    } else {
+      showError(data.error || '生成失败');
+    }
   } catch (err) {
-    showError(err.message || '提交任务失败，请重试');
+    showError(err.message || '生成失败，请重试');
   } finally {
     isGenerating = false;
   }
 }
 
-// submitVideoTask posts the form and polls the async job until it completes.
-async function submitVideoTask(endpoint, formData) {
-  const startTime = Date.now();
-  let resp = await fetch(endpoint, { method: 'POST', body: formData });
-  let data;
-  try {
-    data = await resp.json();
-  } catch (e) {
-    throw new Error('服务器响应异常，请重试');
-  }
-  if (!data.success || !data.task_id) {
-    throw new Error(data.error || '提交任务失败');
-  }
-
-  const taskId = data.task_id;
-  const elapsedSec = () => Math.floor((Date.now() - startTime) / 1000);
-
-  // Background progress simulation while polling
-  const progInterval = setInterval(() => {
-    const t = elapsedSec();
-    let pct, msg;
-    if (t < 30) {
-      pct = Math.min(t * 3, 30);
-      msg = `等待 AI 处理中... ${t}s`;
-    } else if (t < 120) {
-      pct = 30 + (t - 30) * 0.5;
-      msg = `AI 正在生成视频片段... 请耐心等待 (${Math.ceil((180 - t) / 60)} 分钟)`;
-    } else {
-      pct = Math.min(90, 60 + (t - 120) * 0.3);
-      msg = `正在拼接视频片段... (${Math.ceil((300 - t) / 60)} 分钟)`;
-    }
-    updateProgress(pct, msg);
-    if (t >= 300) clearInterval(progInterval);
-  }, 5000);
-
-  try {
-    // Poll up to 45 minutes
-    for (let attempt = 0; attempt < 900; attempt++) {
-      const sresp = await fetch('/api/convert/video/task/' + taskId);
-      let sdata;
-      try {
-        sdata = await sresp.json();
-      } catch (e) {
-        await sleep(3000);
-        continue;
-      }
-      if (sdata.status === 'completed') {
-        const url = sdata.download_url;
-        $('resultVideo').src = url;
-        $('downloadLink').href = url;
-        updateProgress(100, '完成！');
-        if (sdata.notice) {
-          showResultWithNotice('视频生成成功', sdata.notice);
-        } else {
-          showResult('视频生成成功！');
-        }
-        return;
-      }
-      if (sdata.status === 'failed') {
-        throw new Error(sdata.error || '视频生成失败');
-      }
-      if (sresp.status === 404) {
-        throw new Error('任务不存在或已过期，请重新生成');
-      }
-      await sleep(3000);
-    }
-    throw new Error('生成超时，请稍后重试');
-  } finally {
-    clearInterval(progInterval);
-  }
-}
-
-function showStatus(text, progress) {
+function showStatus(text) {
   els.status.hidden = false;
   els.result.hidden = true;
   els.statusText.textContent = text;
-  if (progress !== undefined) {
-    const bar = $('progressBar');
-    const fill = $('progressFill');
-    const progText = $('progressText');
-    if (bar && fill && progText) {
-      bar.hidden = false;
-      progText.hidden = false;
-      fill.style.width = Math.min(progress, 100) + '%';
-      progText.textContent = progress < 100 ? `生成中... ${Math.round(progress)}%` : '完成！';
-    }
-  }
-}
-
-function updateProgress(pct, text) {
-  const bar = $('progressBar');
-  const fill = $('progressFill');
-  const progText = $('progressText');
-  if (!bar || !fill || !progText) return;
-  bar.hidden = false;
-  progText.hidden = false;
-  fill.style.width = Math.min(pct, 100) + '%';
-  progText.textContent = text || `生成中... ${Math.round(pct)}%`;
 }
 
 function showResult(text) {
   els.status.hidden = true;
   els.result.hidden = false;
   els.resultText.textContent = text;
-  els.resultText.style.color = '';
-  if (els.resultVideo) {
-    els.resultVideo.style.display = 'block';
-  }
-}
-
-function showResultWithNotice(text, notice) {
-  els.status.hidden = true;
-  els.result.hidden = false;
-  els.resultText.textContent = text;
-  els.resultText.style.color = '';
-  showNotice(notice);
-  if (els.resultVideo) {
-    els.resultVideo.style.display = 'block';
-  }
-}
-
-function showNotice(msg) {
-  let el = $('resultNotice');
-  if (!el) {
-    el = document.createElement('p');
-    el.id = 'resultNotice';
-    el.style.cssText = 'margin:8px 0;padding:10px 12px;background:#fef3c7;border:1px solid #fcd34d;border-radius:var(--radius-sm);color:#92400e;font-size:0.85rem;';
-    const link = $('downloadLink');
-    link.parentNode.insertBefore(el, link);
-  }
-  el.textContent = msg;
-  el.hidden = false;
-}
-
-function hideNotice() {
-  const el = $('resultNotice');
-  if (el) el.hidden = true;
 }
 
 function showError(msg) {
@@ -717,20 +599,11 @@ function showError(msg) {
   els.result.hidden = false;
   els.resultText.textContent = msg;
   els.resultText.style.color = '#ef4444';
-  hideNotice();
-  if (els.resultVideo) {
-    els.resultVideo.style.display = 'none';
-  }
 }
 
 function hideResult() {
   els.status.hidden = true;
   els.result.hidden = true;
-  hideNotice();
-  if (els.resultVideo) {
-    els.resultVideo.style.display = 'none';
-    els.resultVideo.removeAttribute('src');
-  }
 }
 
 function resetAll() {

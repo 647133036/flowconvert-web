@@ -220,7 +220,7 @@ pub async fn handle_translate_file(
     let dl_url = match app.file_store.register(&result, &format!("translated.{}", ext)) {
         Ok(url) => url,
         Err(e) => {
-            tracing::error!("保存翻译文件失败: {}", e);
+            tracing::error!("保存翻译文件失败: {}", e); tracing::error!("result path: {}", result);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
                 "success": false,
                 "error": "保存文件失败"

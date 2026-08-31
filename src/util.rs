@@ -34,6 +34,7 @@ pub struct CmdResult {
 
 pub fn run_cmd_timeout(timeout: Duration, program: &str, args: &[&str]) -> CmdResult {
     let mut cmd = Command::new(program);
+    cmd.current_dir(env!("CARGO_MANIFEST_DIR"));
     cmd.args(args);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
