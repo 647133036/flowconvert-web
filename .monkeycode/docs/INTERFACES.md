@@ -245,6 +245,71 @@ PDF 转 Office 文档。
 
 ---
 
+## OCR 文字识别
+
+### 页面
+
+`GET /ocr` — OCR 文字识别页（导航位于「翻译」与「视频生成」之间）。
+
+### POST /api/ocr
+
+识别图片或 PDF 中的文字，可返回多种原版式导出文件与简体中文翻译。
+
+**请求**: `multipart/form-data`（`file` 与 `url` 二选一）
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|------|------|------|------|------|
+| file | file | 二选一 | - | 图片或 PDF（jpg/jpeg/png/bmp/tiff/tif/webp/gif/pdf，≤50MB）|
+| url | string | 二选一 | - | 公网可访问的图片或 PDF 直链，≤50MB，最多 5 次重定向 |
+| mode | string | 否 | `general` | `general` / `advanced`（多 PSM 取最优置信度）|
+| quality | string | 否 | `normal` | `normal`（150 DPI）/ `high`（300 DPI）|
+| charset | string | 否 | `auto` | `auto` / `zh_hans` / `zh_hant` |
+| engine | string | 否 | `auto` | `auto` / `tesseract` / `pp_ocr`；auto 优先 Tesseract，不可用时回退 PP-OCR，engine=pp_ocr 则反向回退 Tesseract |
+| redbox | bool | 否 | `false` | 输出文字位置红框标记图 |
+| optimize | bool | 否 | `false` | 过滤页眉页脚等噪声文本 |
+| translate | bool | 否 | `false` | 额外返回简体中文翻译 |
+| formats | string[] | 否 | `txt` | `txt` / `docx` / `xlsx` / `json`，逗号分隔或重复字段 |
+
+校验规则：
+- 上传文件扩展名须在白名单内，且 `http.DetectContentType` 嗅探结果需与该扩展名注册的 MIME 一致，否则返回 400
+- 链接经 `service.FetchFile` 校验：仅 http/https、禁止内网与保留地址、魔数嗅探扩展名、白名单校验
+- `mode` / `quality` / `charset` / `engine` 取值非法返回 400
+
+**响应**:
+```json
+{
+  "success": true,
+  "text": "识别到的完整文本",
+  "translated_text": "简体中文翻译（translate=1 时）",
+  "downloads": [
+    {"name": "识别结果.txt", "type": "txt", "url": "/api/download/<id>"}
+  ],
+  "engine": "tesseract | pp_ocr | pdftext",
+  "pages": 1,
+  "chars": 123,
+  "charset": "zh_hans",
+  "from_text_layer": false,
+  "layout": {"columns": 1, "tables": 0, "blocks": 5, "lines": 12},
+  "blocks": [],
+  "lines": [],
+  "filtered_headers": ["过滤掉的页眉页脚文本"],
+  "warnings": ["非致命告警"],
+  "elapsed_ms": 1234,
+  "options": {"mode": "general", "quality": "normal", "charset": "auto", "redbox": false, "optimize": false, "translate": false, "formats": ["txt"], "engine": "auto"},
+  "source": "file | url",
+  "ext": "png",
+  "empty": false
+}
+```
+
+- PDF 优先抽取内嵌文本层（`engine=pdftext`、`from_text_layer=true`），字符级 bbox 无损，无文本层才走图像 OCR
+- 文本层乱码检测：子集字体缺少 ToUnicode 映射时，PDF 文本层会抽出乱码。判定条件为「私用区字符占比 > 1%」或「所有占比 ≥5% 的字母体系（拉丁/中日韩）平均连续片段长度过短且单字片段占比 > 30%」；命中则回退图像 OCR 并在 `warnings` 中提示
+- 识别无结果时 `empty=true`、`text=""`、`lines=[]`，仍返回 200；`formats` 指定的导出文件照常生成（内容为空），供前端展示空结果提示
+- 下载文件经 `FileStore.Register` 复制到输出目录，`/api/download/<id>` 带 TTL 自动清理
+- 后端实现：`internal/handler/ocr.go` → `internal/service/ocr.go` → `scripts/ocr.py`（Tesseract 与 PP-OCR ONNX 双引擎互为回退，PP-OCR 用 models/ocr 下官方配套 det/rec 模型）
+- 脚本超时：标准质量 300s、高清 540s，开启翻译再 +180s
+
+---
+
 ## 文件下载
 
 ### GET /api/download/{name}

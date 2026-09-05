@@ -5,6 +5,8 @@ import re
 
 import requests
 
+from pdf_utils import clean_pdf_text
+
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FlowConvert/1.0"
 
 # ISO 639-2/3 (3-letter) -> ISO 639-1 (2-letter) mapping for detected languages
@@ -322,19 +324,11 @@ def translate_pdf(src_path, out_path, source, target):
     else:
         font_name = "Helvetica"
 
-    # 第一步：用 pymupdf 提取文字层
-    raw_text = ""
-    try:
-        import fitz
-        doc = fitz.open(src_path)
-        for page in doc:
-            raw_text += page.get_text() + "\n\n"
-        doc.close()
-    except Exception:
-        pass
+    # 第一步：用 pymupdf 提取文字层（空文本层与乱码文本层都视为不可用）
+    raw_text = clean_pdf_text(src_path, min_chars=50)
 
-    # 第二步：文字层过少时降级 OCR
-    if len(raw_text.strip()) < 50:
+    # 第二步：文字层不可用时降级 OCR
+    if not raw_text.strip():
         try:
             import fitz
             from pp_ocr_onnx import ocr_image

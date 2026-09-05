@@ -16,6 +16,7 @@
 | 证件照 | `POST /api/convert/idphoto` | 一寸/二寸，支持白/蓝/红背景 |
 | 文本翻译 | `POST /api/translate` | 自动检测源语言，多引擎 fallback（Google/DeepL/TranslateCom），无需 API Key |
 | 文件翻译 | `POST /api/translate/file` | 文档翻译下载（支持 PDF/Word/Excel/PPT，含 OCR）|
+| OCR 文字识别 | `POST /api/ocr` | 图片/PDF 提取文字，原版式导出 TXT/Word/Excel/JSON，可翻译为简体中文 |
 | AI 文生图 | `POST /api/convert/image/text` | 文本生成图像 |
 | AI 视频生成 | `POST /api/convert/video/text` | 文本生成视频（最长 60s）|
 | AI 视频（首尾帧）| `POST /api/convert/video/keyframe` | 首尾帧控制视频生成 |
@@ -28,10 +29,34 @@ PDF 转 Word/Excel 时，若 PDF 无文本层（扫描件、照片式 PDF），�
 
 - **引擎**：Tesseract OCR（通过 `pytesseract` 调用）
 - **语言**：`chi_sim+eng`（简体中文 + 英文）
-- **渲染**：使用 PyMuPDF 将 PDF 页面渲染为图片，再以 300 DPI 送入 Tesseract 识别
+- **渲染**：使用 PyMuPDF 将 PDF 页面渲染为图片（150–200 DPI）后送入引擎识别
 - **翻译场景**：文件翻译同样支持 OCR，扫描版文档可完整识别后翻译
 
-如需调整 OCR 语言或质量，可在脚本中修改 `ocr_pdf()` 的 `lang` 参数。
+### OCR 文字识别（独立页面 `/ocr`）
+
+上传图片或 PDF，或填写文档链接，提取其中的文字并按原版式导出。识别引擎为 `scripts/ocr.py`，本地运行、无需 API Key。
+
+- **支持格式**：PNG / JPG / BMP / WEBP / GIF / TIFF / PDF，单文件不超过 50MB
+- **输入来源**：上传文件，或公网可访问的图片/PDF 直链（`url` 字段，与 `file` 二选一）
+- **识别模式**：`general`（通用，速度快）/ `advanced`（高级，多 PSM 取最优置信度，准确率更高）
+- **识别质量**：`normal`（150 DPI）/ `high`（300 DPI，高清放大，耗时稍长）
+- **输出字形**：`auto`（OpenCC 双向距离自动检测）/ `zh_hans` / `zh_hant`（繁简转换）
+- **模型选择**：`auto`（推荐，优先 Tesseract，不可用时回退 PP-OCR）/ `tesseract` / `pp_ocr`（官方配套 PP-OCRv4 模型，中文准确率高、速度更快，均支持文字位置标注）
+- **红框标记**：`redbox=1` 输出每个文字块位置的标注图
+- **文本优化**：`optimize=1` 过滤页眉页脚等噪声（页面默认勾选，接口默认关闭）
+- **翻译**：`translate=1` 额外返回 `translated_text`（简体中文）
+- **导出格式**：`formats=txt,docx,xlsx,json`，返回 `downloads` 中的下载链接列表
+- **预览与复制**：识别完成后，页面「开始识别」右侧的「预览」按钮按选中的导出格式分页展示文件内容（TXT 原文、Word 版式、Excel 表格、JSON 结构）；「复制」按钮把识别内容写入剪贴板。两者在识别完成前为禁用态
+- **PDF 优先走文本层**：若 PDF 内嵌可复制文字，直接抽取字符级 bbox（`engine=pdftext`、`from_text_layer=true`），无损且不消耗 OCR 时间；若文本层是乱码（子集字体缺少 ToUnicode 字符映射，抽出来是 `22n2%S25SS iskoe` 这类内容），自动判定为无效并回退到图像 OCR，同时写入 `warnings` 提示
+- **接口返回**：`text`、`translated_text`、`downloads`、`engine`、`pages`、`chars`、`charset`、`from_text_layer`、`layout`、`blocks`、`lines`、`filtered_headers`、`warnings`、`elapsed_ms`、`options`、`source`、`ext`、`empty`
+
+```bash
+curl -X POST -F "file=@photo.png" \
+  -F "mode=advanced" -F "quality=high" -F "charset=auto" \
+  -F "engine=auto" -F "redbox=1" -F "optimize=1" -F "translate=1" \
+  -F "formats=txt,docx,xlsx,json" \
+  http://localhost:8080/api/ocr
+```
 
 ## 快速开始
 
@@ -136,9 +161,13 @@ flowconvert/
 │   ├── sketch.py           # 素描效果
 │   ├── idphoto.py          # 证件照生成
 │   ├── translate.py        # 文本翻译（含 OCR 支持）
+│   ├── ocr.py              # OCR 文字识别（Tesseract → PP-OCR ONNX）
+│   ├── pp_ocr_onnx.py      # PP-OCR ONNX 引擎实现
 │   └── video.py            # AI 视频生成
 └── web/                    # 前端页面与静态资源
     ├── index.html          # 首页
+    ├── translate.html      # 翻译页
+    ├── ocr.html            # OCR 文字识别页
     ├── video.html          # 视频生成页
     ├── image.html          # 图像生成页
     └── ...

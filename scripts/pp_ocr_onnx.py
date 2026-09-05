@@ -1,83 +1,97 @@
-"""统一 OCR 模块 - 支持 Tesseract / PP-OCR ONNX / EasyOCR 三种引擎。
+"""统一 OCR 模块 - 支持 Tesseract / EasyOCR / PP-OCR ONNX 三种引擎。
 
 优先级:
-  1. Tesseract (本地, 快速, chi_sim+eng 中英文支持)
+  1. Tesseract (本地, chi_sim+eng 中英文支持)
   2. EasyOCR (需安装, 中英日韩多语言)
-  3. PP-OCR ONNX (实验性, 轻量级 ONNX 模型, 当前识别效果待优化)
+  3. PP-OCR ONNX (纯 CPU, 官方配套模型)
+
+PP-OCR 分支使用 models/ocr 下同一来源下载的配套文件:
+  det.onnx = ch_PP-OCRv4_det_infer.onnx
+  rec.onnx = ch_PP-OCRv4_rec_infer.onnx (字符表内嵌在模型元数据里, 与字典严格匹配)
+  ppocr_keys_v1.txt 仅作元数据缺失时的兜底。
 
 使用:
-  from pp_ocr_onnx import ocr_image, ocr_pdf, get_available_engine
+  from pp_ocr_onnx import ocr_image, ocr_pdf, get_available_engine, ppocr_recognize
   engine = get_available_engine()          # 返回 "tesseract" / "easyocr" / "pp_ocr"
-  text = ocr_pdf("/path/to/pdf.pdf")       # 自动选择最佳引擎
-  lines = ocr_image(np_image)              # 返回 [(text, bbox), ...]
+  lines = ppocr_recognize(np_image)        # [{'text', 'score', 'box'}, ...]
 """
 
 import logging
+import math
 import os
-from typing import List, Optional, Tuple
+from typing import List, Tuple
+
+os.environ.setdefault("ORT_DISABLE_LOG", "1")
 
 logger = logging.getLogger(__name__)
 
 # 默认语言配置
 DEFAULT_LANG = "chi_sim+eng"
 
+MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", "ocr")
+DET_PATH = os.path.join(MODEL_DIR, "det.onnx")
+REC_PATH = os.path.join(MODEL_DIR, "rec.onnx")
+KEYS_PATH = os.path.join(MODEL_DIR, "ppocr_keys_v1.txt")
+
+# 与 RapidOCR / PaddleOCR v4 官方 config.yaml 一致的参数
+DET_LIMIT_SIDE_LEN = 736
+DET_LIMIT_TYPE = "min"
+DET_MAX_SIDE_LEN = 2000
+DET_INPUT_MAX = 3500
+DET_MEAN = [0.5, 0.5, 0.5]
+DET_STD = [0.5, 0.5, 0.5]
+DET_THRESH = 0.3
+BOX_THRESH = 0.5
+UNCLIP_RATIO = 1.6
+REC_IMG_SHAPE = (3, 48, 320)
+REC_BATCH_NUM = 6
+REC_SCORE = 0.5
+
 
 def get_available_engine() -> str:
     """返回可用的最佳 OCR 引擎名称。"""
-    try:
-        import pytesseract  # noqa: F401
-        return "tesseract"
-    except ImportError:
-        pass
-    try:
-        import easyocr  # noqa: F401
+    import importlib.util
+
+    if importlib.util.find_spec("pytesseract") is not None:
+        try:
+            import pytesseract
+
+            pytesseract.get_languages(config="")
+            return "tesseract"
+        except Exception:
+            pass
+    if importlib.util.find_spec("easyocr") is not None:
         return "easyocr"
-    except ImportError:
-        pass
-    return "pp_ocr"  # 始终可用（ONNX 模型文件存在即可）
+    return "pp_ocr"
 
 
 def ocr_image(image, lang: str = DEFAULT_LANG) -> List[str]:
-    """对单张图像进行 OCR，返回文本行列表。
-
-    Args:
-        image: numpy array (BGR/RGB) 或 PIL Image
-        lang: Tesseract 语言代码，如 "chi_sim+eng"
-
-    Returns:
-        List[str]: 每行文本
-    """
+    """对单张图像进行 OCR，返回文本行列表。"""
     engine = get_available_engine()
     logger.info(f"使用 OCR 引擎: {engine}")
 
     if engine == "tesseract":
         return _ocr_image_tesseract(image, lang)
-    elif engine == "easyocr":
+    if engine == "easyocr":
         return _ocr_image_easyocr(image)
-    else:
-        return _ocr_image_pp_ocr(image)
+    return [item["text"] for item in ppocr_recognize(image)]
 
 
 def _ocr_image_tesseract(image, lang: str = DEFAULT_LANG) -> List[str]:
     """Tesseract OCR 实现。"""
     import pytesseract
-    from PIL import Image
     import numpy as np
+    from PIL import Image
 
     if isinstance(image, np.ndarray):
-        if image.ndim == 3 and image.shape[2] == 3:
-            # BGR -> RGB
-            image_rgb = image[:, :, ::-1]
-        else:
-            image_rgb = image
+        image_rgb = image[:, :, ::-1] if image.ndim == 3 and image.shape[2] == 3 else image
         pil_img = Image.fromarray(image_rgb)
     else:
         pil_img = image
 
     try:
         text = pytesseract.image_to_string(pil_img, lang=lang)
-        lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
-        return lines
+        return [line.strip() for line in text.strip().splitlines() if line.strip()]
     except Exception as e:
         logger.warning(f"Tesseract OCR 失败: {e}")
         return []
@@ -89,173 +103,360 @@ def _ocr_image_easyocr(image) -> List[str]:
     import numpy as np
 
     reader = easyocr.Reader(["ch_sim", "en"], gpu=False)
+    arr = image if isinstance(image, np.ndarray) else np.array(image)
 
-    if isinstance(image, np.ndarray):
-        # EasyOCR 接受 BGR numpy array
-        arr = image
-    else:
-        arr = np.array(image)
-
-    results = reader.readtext(arr)
-    lines = []
-    for _, text, _ in results:
-        if text.strip():
-            lines.append(text.strip())
-    return lines
+    return [text.strip() for _, text, _ in reader.readtext(arr) if text.strip()]
 
 
-def _ocr_image_pp_ocr(image) -> List[str]:
-    """PP-OCR ONNX 实现（实验性，轻量级）。"""
+# ── PP-OCR ONNX ─────────────────────────────────────────
+
+
+def _to_bgr(image) -> "np.ndarray":
+    """归一化输入为 BGR numpy 数组（PIL Image 视为 RGB）。"""
     import cv2
     import numpy as np
 
-    try:
-        import onnxruntime as ort
-    except ImportError:
-        logger.warning("onnxruntime 未安装，回退到 Tesseract")
-        return _ocr_image_tesseract(image)
-
-    det_path = os.path.join(os.path.dirname(__file__), "..", "models", "ocr", "det.onnx")
-    rec_path = os.path.join(os.path.dirname(__file__), "..", "models", "ocr", "rec.onnx")
-    dict_path = os.path.join(os.path.dirname(__file__), "..", "models", "ocr", "ppocr_keys_v1.txt")
-
-    if not all(os.path.exists(p) for p in [det_path, rec_path, dict_path]):
-        logger.warning("PP-OCR 模型文件缺失，回退到 Tesseract")
-        return _ocr_image_tesseract(image)
-
-    # 加载模型
-    try:
-        det_session = ort.InferenceSession(det_path, providers=["CPUExecutionProvider"])
-        rec_session = ort.InferenceSession(rec_path, providers=["CPUExecutionProvider"])
-    except Exception as e:
-        logger.warning(f"PP-OCR 模型加载失败: {e}，回退到 Tesseract")
-        return _ocr_image_tesseract(image)
-
-    # 加载词表
-    dict_chars = []
-    with open(dict_path, encoding="utf-8") as f:
-        dict_chars = [line.strip() for line in f if line.strip()]
-    dict_full = dict_chars + [" ", "?", "<blank>"]
-
-    # 预处理图像
     if isinstance(image, np.ndarray):
-        if image.ndim == 2:
-            img_bgr = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        elif image.ndim == 3 and image.shape[2] == 3:
-            img_bgr = image
-        else:
-            img_bgr = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+        arr = image
     else:
-        img_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        arr = np.array(image)
+        if arr.ndim == 3 and arr.shape[2] == 3:
+            arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+    if arr.ndim == 2:
+        return cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+    if arr.shape[2] == 4:
+        return cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
+    return arr
 
-    H, W = img_bgr.shape[:2]
 
-    # 文本检测
-    long_side = 960
-    scale = long_side / max(H, W)
-    nw, nh = int(W * scale), int(H * scale)
-    nw = (nw // 32) * 32
-    nh = (nh // 32) * 32
-    resized = cv2.resize(img_bgr, (nw, nh))
-    arr = resized.astype(np.float32) / 255.0
-    mean = np.array([0.485, 0.456, 0.406]).reshape(1, 1, 3).astype(np.float32)
-    std = np.array([0.229, 0.224, 0.225]).reshape(1, 1, 3).astype(np.float32)
-    norm = ((arr - mean) / std).astype(np.float32)
-    blob = np.transpose(norm, (2, 0, 1))[np.newaxis, ...].astype(np.float32)
+def _read_character_list(rec_session) -> List[str]:
+    """读取与识别模型严格匹配的字符表。
 
+    官方 ch_PP-OCRv4_rec_infer.onnx 把字符表写在模型元数据的 character 字段里，
+    优先使用它，保证模型与字典永远来自同一份导出。
+    """
     try:
-        scores = det_session.run(None, {"x": blob})[0][0, 0].astype(np.float32)
-    except Exception as e:
-        logger.warning(f"PP-OCR 检测推理失败: {e}，回退到 Tesseract")
-        return _ocr_image_tesseract(image)
+        meta = dict(rec_session.get_modelmeta().custom_metadata_map)
+    except Exception:
+        meta = {}
+    chars = meta.get("character")
+    if chars:
+        items = [line for line in chars.splitlines()]
+        if items:
+            return items
+    if os.path.exists(KEYS_PATH):
+        with open(KEYS_PATH, "r", encoding="utf-8") as f:
+            return [line.rstrip("\r\n") for line in f]
+    raise RuntimeError("PP-OCR 字符字典缺失")
 
-    # 后处理：找文本区域
-    binary = (scores > 0.3).astype(np.uint8) * 255
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
-    dilated = cv2.dilate(binary, kernel, iterations=4)
-    eroded = cv2.erode(dilated, kernel, iterations=3)
-    contours, _ = cv2.findContours(eroded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # 识别每个文本区域
-    lines = []
-    for c in contours:
-        if cv2.contourArea(c) < 100:
+def _ppocr_sessions():
+    """加载 (det, rec) 会话与字符表，模块级缓存避免每页重复加载。"""
+    import onnxruntime as ort
+
+    global _PP_CACHE
+    if _PP_CACHE is None:
+        if not (os.path.exists(DET_PATH) and os.path.exists(REC_PATH)):
+            raise RuntimeError("PP-OCR 模型文件缺失")
+        opts = ort.SessionOptions()
+        opts.log_severity_level = 3
+        det = ort.InferenceSession(DET_PATH, sess_options=opts, providers=["CPUExecutionProvider"])
+        rec = ort.InferenceSession(REC_PATH, sess_options=opts, providers=["CPUExecutionProvider"])
+        keys = _read_character_list(rec)
+        # 官方解码表: [blank] + 字典 + [空格]，blank 在 0 号位
+        table = ["blank"] + keys + [" "]
+        channels = rec.get_outputs()[0].shape[-1]
+        if channels and len(table) != channels:
+            logger.warning(
+                f"PP-OCR 字符表 {len(table)} 项与模型输出维度 {channels} 不一致，识别结果可能异常"
+            )
+        _PP_CACHE = (det, rec, table)
+    return _PP_CACHE
+
+
+_PP_CACHE = None
+
+
+class DBPostProcess:
+    """Differentiable Binarization (PP-OCRv4 det) 后处理。"""
+
+    def __init__(self, thresh=DET_THRESH, box_thresh=BOX_THRESH, unclip_ratio=UNCLIP_RATIO):
+        import numpy as np
+
+        self.thresh = thresh
+        self.box_thresh = box_thresh
+        self.unclip_ratio = unclip_ratio
+        self.min_size = 3
+        self.max_candidates = 1000
+        self.dilation_kernel = np.array([[1, 1], [1, 1]])
+
+    def __call__(self, pred, ori_shape):
+        import cv2
+        import numpy as np
+
+        src_h, src_w = ori_shape
+        pred = pred[:, 0, :, :]
+        mask = pred[0] > self.thresh
+        mask = cv2.dilate(mask.astype(np.uint8), self.dilation_kernel)
+        return self._boxes_from_bitmap(pred[0], mask, src_w, src_h)
+
+    def _boxes_from_bitmap(self, pred, bitmap, dest_width, dest_height):
+        import cv2
+        import numpy as np
+        import pyclipper
+        from shapely.geometry import Polygon
+
+        height, width = bitmap.shape
+        outs = cv2.findContours((bitmap * 255).astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        contours = outs[1] if len(outs) == 3 else outs[0]
+
+        boxes, scores = [], []
+        for contour in contours[: self.max_candidates]:
+            box, sside = self._min_area_box(contour)
+            if sside < self.min_size:
+                continue
+            score = self._box_score_fast(pred, box)
+            if self.box_thresh > score:
+                continue
+            unclipped = self._unclip(box, Polygon, pyclipper)
+            unclipped, sside = self._min_area_box(unclipped)
+            if sside < self.min_size + 2:
+                continue
+            unclipped[:, 0] = np.clip(np.round(unclipped[:, 0] / width * dest_width), 0, dest_width)
+            unclipped[:, 1] = np.clip(np.round(unclipped[:, 1] / height * dest_height), 0, dest_height)
+            boxes.append(unclipped.astype(np.int32))
+            scores.append(score)
+        return np.array(boxes, dtype=np.int32), scores
+
+    @staticmethod
+    def _min_area_box(contour):
+        import cv2
+        import numpy as np
+
+        bounding_box = cv2.minAreaRect(contour)
+        points = sorted(list(cv2.boxPoints(bounding_box)), key=lambda x: x[0])
+
+        idx1, idx4 = (0, 1) if points[1][1] > points[0][1] else (1, 0)
+        idx2, idx3 = (2, 3) if points[3][1] > points[2][1] else (3, 2)
+        box = np.array([points[idx1], points[idx2], points[idx3], points[idx4]])
+        return box, min(bounding_box[1])
+
+    @staticmethod
+    def _box_score_fast(bitmap, box):
+        import cv2
+        import numpy as np
+
+        h, w = bitmap.shape[:2]
+        box = box.copy()
+        xmin = int(np.clip(np.floor(box[:, 0].min()), 0, w - 1))
+        xmax = int(np.clip(np.ceil(box[:, 0].max()), 0, w - 1))
+        ymin = int(np.clip(np.floor(box[:, 1].min()), 0, h - 1))
+        ymax = int(np.clip(np.ceil(box[:, 1].max()), 0, h - 1))
+
+        mask = np.zeros((ymax - ymin + 1, xmax - xmin + 1), dtype=np.uint8)
+        box[:, 0] -= xmin
+        box[:, 1] -= ymin
+        cv2.fillPoly(mask, box.reshape(1, -1, 2).astype(np.int32), 1)
+        return cv2.mean(bitmap[ymin : ymax + 1, xmin : xmax + 1], mask)[0]
+
+    def _unclip(self, box, Polygon, pyclipper):
+        import numpy as np
+
+        poly = Polygon(box)
+        distance = poly.area * self.unclip_ratio / poly.length
+        offset = pyclipper.PyclipperOffset()
+        offset.AddPath(box, pyclipper.JT_ROUND, pyclipper.ET_CLOSEDPOLYGON)
+        return np.array(offset.Execute(distance)).reshape((-1, 1, 2))
+
+
+def _det_image(image):
+    """文本检测，返回 [(box, score), ...]，坐标为原图像素。"""
+    import cv2
+    import numpy as np
+
+    h, w = image.shape[:2]
+    work, scale = image, 1.0
+    if max(h, w) > DET_MAX_SIDE_LEN:
+        ratio = float(DET_MAX_SIDE_LEN) / max(h, w)
+        work = cv2.resize(image, (max(int(w * ratio), 1), max(int(h * ratio), 1)))
+        scale = 1.0 / ratio
+
+    hh, ww = work.shape[:2]
+    if DET_LIMIT_TYPE == "min":
+        ratio = DET_LIMIT_SIDE_LEN / min(hh, ww) if min(hh, ww) < DET_LIMIT_SIDE_LEN else 1.0
+    else:
+        ratio = DET_LIMIT_SIDE_LEN / max(hh, ww) if max(hh, ww) > DET_LIMIT_SIDE_LEN else 1.0
+
+    resize_h = int(round(int(hh * ratio) / 32)) * 32
+    resize_w = int(round(int(ww * ratio) / 32)) * 32
+    if max(resize_h, resize_w) > DET_INPUT_MAX:
+        shrink = float(DET_INPUT_MAX) / max(resize_h, resize_w)
+        resize_h = int(round(int(resize_h * shrink) / 32)) * 32
+        resize_w = int(round(int(resize_w * shrink) / 32)) * 32
+    if resize_h <= 0 or resize_w <= 0:
+        return []
+
+    resized = cv2.resize(work, (resize_w, resize_h))
+    blob = (resized.astype(np.float32) / 255.0 - np.array(DET_MEAN, dtype=np.float32)) / np.array(
+        DET_STD, dtype=np.float32
+    )
+    blob = blob.transpose((2, 0, 1))[np.newaxis, ...].astype(np.float32)
+
+    det, _, _ = _ppocr_sessions()
+    scores = det.run(None, {"x": blob})[0]
+    boxes, box_scores = DBPostProcess()(scores, (hh, ww))
+    if len(boxes) == 0:
+        return []
+
+    out = []
+    for box, score in zip(boxes, box_scores):
+        if box.shape[0] != 4:
             continue
-        x, y, w, h = cv2.boundingRect(c)
-        ox, oy, ow, oh = int(x / scale), int(y / scale), int(w / scale), int(h / scale)
+        if scale != 1.0:
+            box = (box.astype(np.float32) * scale).astype(np.int32)
+        rect_w = int(np.linalg.norm(box[0] - box[1]))
+        rect_h = int(np.linalg.norm(box[0] - box[3]))
+        if rect_w <= 3 or rect_h <= 3:
+            continue
+        out.append((box, float(score)))
+    return out
 
-        crop = img_bgr[oy:oy + oh, ox:ox + ow]
-        if crop.size == 0 or crop.shape[0] < 10:
+
+def _crop_box(image, box):
+    """把四边形文本框透视裁剪成横向条带。"""
+    import cv2
+    import numpy as np
+
+    width = int(max(np.linalg.norm(box[0] - box[1]), np.linalg.norm(box[2] - box[3])))
+    height = int(max(np.linalg.norm(box[0] - box[3]), np.linalg.norm(box[1] - box[2])))
+    if width < 2 or height < 2:
+        return None
+
+    pts = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=np.float32)
+    matrix = cv2.getPerspectiveTransform(box.astype(np.float32), pts)
+    crop = cv2.warpPerspective(
+        image, matrix, (width, height), borderMode=cv2.BORDER_REPLICATE, flags=cv2.INTER_CUBIC
+    )
+    if crop.shape[0] * 1.0 / crop.shape[1] >= 1.5:
+        crop = np.rot90(crop)
+    return crop
+
+
+def _rec_transform(crops: List["np.ndarray"], max_wh_ratio: float) -> "np.ndarray":
+    """批量识别预处理: 高度 48，宽度按整批最大宽高比，右侧补零。"""
+    img_c, img_h, img_w = REC_IMG_SHAPE
+    img_w = int(img_h * max_wh_ratio)
+
+    import cv2
+    import numpy as np
+
+    batch = []
+    for crop in crops:
+        h, w = crop.shape[:2]
+        ratio = w / float(h)
+        resized_w = img_w if math.ceil(img_h * ratio) > img_w else int(math.ceil(img_h * ratio))
+        resized = cv2.resize(crop, (resized_w, img_h)).astype(np.float32)
+        resized = resized.transpose((2, 0, 1)) / 255.0
+        resized -= 0.5
+        resized /= 0.5
+        padded = np.zeros((img_c, img_h, img_w), dtype=np.float32)
+        padded[:, :, 0:resized_w] = resized
+        batch.append(padded[np.newaxis, :])
+    return np.concatenate(batch).astype(np.float32)
+
+
+def _ctc_decode(logits: "np.ndarray", table: List[str]) -> List[Tuple[str, float]]:
+    """CTC 解码: blank 在 0 号位，先合并连续重复，再丢弃 blank。"""
+    import numpy as np
+
+    idxs = np.argmax(logits, axis=2)
+    probs = np.max(logits, axis=2)
+    out = []
+    for row_idx, row_prob in zip(idxs, probs):
+        keep = np.ones(len(row_idx), dtype=bool)
+        keep[1:] = row_idx[1:] != row_idx[:-1]
+        keep &= row_idx != 0
+        conf = float(np.mean(row_prob[keep])) if keep.any() else 0.0
+        text = "".join(table[i] for i in row_idx[keep] if 0 < i < len(table))
+        out.append((text, conf))
+    return out
+
+
+def ppocr_recognize(image, text_score: float = REC_SCORE) -> List[dict]:
+    """PP-OCRv4 det+rec 全流程，返回 [{'text','score','box': [x,y,w,h]}]。"""
+    import cv2  # noqa: F401
+    import numpy as np  # noqa: F401
+
+    bgr = _to_bgr(image)
+    det_result = _det_image(bgr)
+    if not det_result:
+        return []
+
+    _, rec, table = _ppocr_sessions()
+    det_result = sorted(det_result, key=lambda item: (item[0][0][1], item[0][0][0]))
+
+    results: List[dict] = []
+    for beg in range(0, len(det_result), REC_BATCH_NUM):
+        group = det_result[beg : beg + REC_BATCH_NUM]
+        crops = []
+        crop_boxes = []
+        max_wh_ratio = REC_IMG_SHAPE[2] / float(REC_IMG_SHAPE[1])
+        for box, _score in group:
+            crop = _crop_box(bgr, box)
+            if crop is None:
+                continue
+            max_wh_ratio = max(max_wh_ratio, crop.shape[1] * 1.0 / crop.shape[0])
+            crops.append(crop)
+            crop_boxes.append(box)
+
+        if not crops:
             continue
 
-        # 识别预处理
-        ch, cw = crop.shape[:2]
-        target_h = 48
-        rs = target_h / ch
-        rnw = int(cw * rs)
-        rnw = ((rnw // 4) + 1) * 4
-        rcrop = cv2.resize(crop, (rnw, target_h))
-        rarr = rcrop.astype(np.float32) / 255.0
-        rnorm = ((rarr - 0.5) / 0.5).astype(np.float32)
-        rblob = np.transpose(rnorm, (2, 0, 1))[np.newaxis, ...].astype(np.float32)
+        blob = _rec_transform(crops, max_wh_ratio)
+        logits = rec.run(None, {"x": blob})[0]
+        for _crop, box, (text, score) in zip(crops, crop_boxes, _ctc_decode(logits, table)):
+            if not text or score < text_score:
+                continue
+            x = int(max(min(np.floor(box[:, 0].min()), bgr.shape[1] - 1), 0))
+            y = int(max(min(np.floor(box[:, 1].min()), bgr.shape[0] - 1), 0))
+            w = int(max(min(np.ceil(box[:, 0].max()), bgr.shape[1]) - x, 1))
+            h = int(max(min(np.ceil(box[:, 1].max()), bgr.shape[0]) - y, 1))
+            results.append({"text": text, "score": round(score, 4), "box": [x, y, w, h]})
 
-        try:
-            logits = rec_session.run(None, {"x": rblob})[0]
-            argmax = np.argmax(logits[0], axis=1)
-            text_parts = []
-            prev = len(dict_full) - 1
-            for idx in argmax:
-                if idx != prev and idx < len(dict_full):
-                    text_parts.append(dict_full[idx])
-                prev = idx
-            text = "".join(text_parts).strip()
-            if text and text not in ("", " ", "<blank>"):
-                lines.append(text)
-        except Exception:
-            pass
+    return results
 
-    return lines
+
+def _ocr_image_pp_ocr(image) -> List[str]:
+    """PP-OCR 识别，仅返回文本行（兼容旧调用方）。"""
+    return [item["text"] for item in ppocr_recognize(image)]
 
 
 def ocr_pdf(pdf_path: str, lang: str = DEFAULT_LANG, dpi: int = 150) -> str:
-    """对 PDF 文件进行 OCR，返回合并文本。
-
-    Args:
-        pdf_path: PDF 文件路径
-        lang: OCR 语言
-        dpi: 渲染 DPI（仅 Tesseract 引擎使用）
-
-    Returns:
-        合并后的文本字符串
-    """
+    """对 PDF 文件进行 OCR，返回合并文本。"""
     engine = get_available_engine()
     logger.info(f"PDF OCR 使用引擎: {engine}")
 
     if engine == "tesseract":
         return _ocr_pdf_tesseract(pdf_path, lang, dpi)
-    elif engine == "easyocr":
+    if engine == "easyocr":
         return _ocr_pdf_easyocr(pdf_path)
-    else:
-        return _ocr_pdf_pp_ocr(pdf_path)
+    return _ocr_pdf_pp_ocr(pdf_path)
 
 
 def _ocr_pdf_tesseract(pdf_path: str, lang: str, dpi: int = 150) -> str:
     """Tesseract PDF OCR。"""
+    import io
     import fitz
     import pytesseract
     from PIL import Image
-    import io
-    import os
 
     text_parts = []
     doc = fitz.open(pdf_path)
     try:
         for i, page in enumerate(doc):
             pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72, dpi / 72))
-            img_data = pix.tobytes("png")
-            img = Image.open(io.BytesIO(img_data))
-            txt = pytesseract.image_to_string(img, lang=lang)
-            text_parts.append(txt)
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            text_parts.append(pytesseract.image_to_string(img, lang=lang))
             if (i + 1) % 5 == 0:
                 logger.info(f"  OCR 进度: {i + 1}/{len(doc)} 页")
     finally:
@@ -266,48 +467,49 @@ def _ocr_pdf_tesseract(pdf_path: str, lang: str, dpi: int = 150) -> str:
 
 def _ocr_pdf_easyocr(pdf_path: str) -> str:
     """EasyOCR PDF OCR。"""
+    import io
     import fitz
     import easyocr
+    import numpy as np
     from PIL import Image
-    import io
 
     reader = easyocr.Reader(["ch_sim", "en"], gpu=False)
     doc = fitz.open(pdf_path)
     text_parts = []
-
-    for i, page in enumerate(doc):
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-        img_data = pix.tobytes("png")
-        img = Image.open(io.BytesIO(img_data))
-        results = reader.readtext(np.array(img))
-        lines = [text for _, text, _ in results if text.strip()]
-        text_parts.append("\n".join(lines))
-        if (i + 1) % 5 == 0:
-            logger.info(f"  OCR 进度: {i + 1}/{len(doc)} 页")
-
-    doc.close()
+    try:
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            lines = [text for _, text, _ in reader.readtext(np.array(img)) if text.strip()]
+            text_parts.append("\n".join(lines))
+            if (i + 1) % 5 == 0:
+                logger.info(f"  OCR 进度: {i + 1}/{len(doc)} 页")
+    finally:
+        doc.close()
     return "\n\n".join(text_parts)
 
 
 def _ocr_pdf_pp_ocr(pdf_path: str) -> str:
     """PP-OCR PDF OCR。"""
-    import fitz
-    from PIL import Image
     import io
+    import fitz
+    import cv2
+    import numpy as np
+    from PIL import Image
 
     text_parts = []
     doc = fitz.open(pdf_path)
-
-    for i, page in enumerate(doc):
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-        img_data = pix.tobytes("png")
-        img = Image.open(io.BytesIO(img_data))
-        lines = _ocr_image_pp_ocr(img)
-        text_parts.append("\n".join(lines))
-        if (i + 1) % 5 == 0:
-            logger.info(f"  OCR 进度: {i + 1}/{len(doc)} 页")
-
-    doc.close()
+    try:
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            bgr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            lines = [item["text"] for item in ppocr_recognize(bgr)]
+            text_parts.append("\n".join(lines))
+            if (i + 1) % 5 == 0:
+                logger.info(f"  OCR 进度: {i + 1}/{len(doc)} 页")
+    finally:
+        doc.close()
     return "\n\n".join(text_parts)
 
 

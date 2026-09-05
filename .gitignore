@@ -43,3 +43,6 @@ Thumbs.db
 
 # Runtime temp outputs
 data/tmp/
+
+# OCR test artifacts
+result.txt

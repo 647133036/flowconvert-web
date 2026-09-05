@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""PDF 转 XLSX 工具 - 使用 pdfminer + openpyxl"""
+"""PDF 转 XLSX 工具 - 先抽文本层，不可用时降级 OCR"""
 import sys
 import argparse
-from pdfminer.high_level import extract_text
 from openpyxl import Workbook
 
+from pdf_utils import clean_pdf_text
+from pp_ocr_onnx import ocr_pdf as ocr_pdf_func
 
-def pdf_to_xlsx(pdf_path: str, output_path: str) -> bool:
-    text = extract_text(pdf_path)
+
+def pdf_to_xlsx(pdf_path: str, output_path: str, lang: str = "chi_sim+eng") -> bool:
+    text = clean_pdf_text(pdf_path, min_chars=1)
+    if not text.strip():
+        sys.stderr.write("文本层缺失或为乱码，启用 OCR 识别扫描版 PDF...\n")
+        text = ocr_pdf_func(pdf_path, lang)
     if not text.strip():
         return False
 

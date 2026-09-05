@@ -40,10 +40,10 @@ func (c *ConvertH) safeErr(w http.ResponseWriter, err error) {
 	c.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"success": false, "error": "处理失败，请稍后重试"})
 }
 
-// saveUpload saves an uploaded file into a tmp dir, validating size and type
-// based on the expected format list.
-func (c *ConvertH) saveUpload(r *http.Request, field string, allowExts []string) (string, string, error) {
-	if err := r.ParseMultipartForm(c.Cfg.MaxSize + 1<<20); err != nil {
+// saveUpload saves an uploaded file into tmpDir, validating size and type
+// against the expected extension list.
+func saveUpload(r *http.Request, cfg *config.Config, field string, allowExts []string, tmpDir string) (string, string, error) {
+	if err := r.ParseMultipartForm(cfg.MaxSize + 1<<20); err != nil {
 		return "", "", fmt.Errorf("上传文件过大或参数错误")
 	}
 	file, header, err := r.FormFile(field)
@@ -51,12 +51,12 @@ func (c *ConvertH) saveUpload(r *http.Request, field string, allowExts []string)
 		return "", "", fmt.Errorf("请选择要上传的文件")
 	}
 	defer file.Close()
-	if header.Size > c.Cfg.MaxSize {
+	if header.Size > cfg.MaxSize {
 		return "", "", fmt.Errorf("文件超过 50MB 限制")
 	}
 
-	fileData, err := io.ReadAll(io.LimitReader(file, c.Cfg.MaxSize+1))
-	if err != nil || int64(len(fileData)) > c.Cfg.MaxSize {
+	fileData, err := io.ReadAll(io.LimitReader(file, cfg.MaxSize+1))
+	if err != nil || int64(len(fileData)) > cfg.MaxSize {
 		return "", "", fmt.Errorf("文件读取失败或超过 50MB 限制")
 	}
 	if len(fileData) < 4 {
@@ -70,11 +70,15 @@ func (c *ConvertH) saveUpload(r *http.Request, field string, allowExts []string)
 	}
 
 	tmpName := fmt.Sprintf("up_%s.%s", strconv.FormatInt(time.Now().UnixNano(), 10), ext)
-	tmpPath := filepath.Join(c.Cfg.TmpDir, tmpName)
+	tmpPath := filepath.Join(tmpDir, tmpName)
 	if err := os.WriteFile(tmpPath, fileData, 0o644); err != nil {
 		return "", "", fmt.Errorf("服务器错误，请重试")
 	}
 	return tmpPath, ext, nil
+}
+
+func (c *ConvertH) saveUpload(r *http.Request, field string, allowExts []string) (string, string, error) {
+	return saveUpload(r, c.Cfg, field, allowExts, c.Cfg.TmpDir)
 }
 
 func min(a, b int) int {

@@ -25,6 +25,7 @@ func main() {
 	translator := &handler.TranslateH{Cfg: cfg, Store: store}
 	imageGen := &handler.ImageGenH{Cfg: cfg, Store: store, AI: ai}
 	videoGen := &handler.VideoGenH{Cfg: cfg, Store: store, AI: ai, Jobs: handler.NewVideoJobStore(30 * time.Minute)}
+	ocr := &handler.OcrH{Cfg: cfg, Store: store, Jobs: handler.NewOcrJobStore(30 * time.Minute)}
 
 	mux := http.NewServeMux()
 
@@ -37,6 +38,8 @@ func main() {
 	mux.HandleFunc("/api/convert/idphoto", conv.HandleIdPhoto)
 	mux.HandleFunc("/api/translate", translator.HandleTranslate)
 	mux.HandleFunc("/api/translate/file", translator.HandleTranslateFile)
+	mux.HandleFunc("/api/ocr", ocr.HandleOcr)
+	mux.HandleFunc("/api/ocr/task/", ocr.HandleOcrTask)
 	mux.HandleFunc("/api/convert/image/text", imageGen.HandleTextImage)
 	mux.HandleFunc("/api/convert/image/edit", imageGen.HandleEditImage)
 	mux.HandleFunc("/api/convert/image/compose", imageGen.HandleComposeImage)
@@ -77,6 +80,8 @@ func pageHandler(w http.ResponseWriter, r *http.Request) {
 		servePage(w, "idphoto.html")
 	case "/translate":
 		servePage(w, "translate.html")
+	case "/ocr":
+		servePage(w, "ocr.html")
 	case "/video":
 		servePage(w, "video.html")
 	case "/image":

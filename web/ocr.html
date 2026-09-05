@@ -1,0 +1,1174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCR 文字识别 - FlowConvert</title>
+<link rel="stylesheet" href="/static/css/style.css?v=4">
+<style>
+  .ocr-card {
+    max-width: 1000px;
+    margin: 0 auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.75rem;
+    box-shadow: 0 2px 12px rgba(0,0,0,.05);
+  }
+  .ocr-card h1 { text-align: center; }
+  .ocr-intro {
+    text-align: center;
+    color: var(--text2);
+    font-size: .92rem;
+    margin-bottom: 1.25rem;
+  }
+  .ocr-src-tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--surface2);
+    padding: 4px;
+    border-radius: var(--radius);
+    margin-bottom: 1.25rem;
+  }
+  .ocr-src-tabs .tab-btn {
+    flex: 1;
+    padding: 10px 16px;
+    border: none;
+    background: transparent;
+    color: var(--text2);
+    font-size: .9rem;
+    font-weight: 500;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .ocr-src-tabs .tab-btn:hover { color: var(--text); }
+  .ocr-src-tabs .tab-btn.active { background: var(--primary); color: #fff; }
+  .ocr-src-panel { display: none; }
+  .ocr-src-panel.active { display: block; }
+
+  .ocr-drop {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 2.25rem 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    background: var(--bg);
+    transition: border-color .2s, background .2s;
+  }
+  .ocr-drop:hover, .ocr-drop.drag-over { border-color: var(--primary); background: rgba(99,102,241,.05); }
+  .ocr-drop.has-file { border-style: solid; border-color: var(--success); }
+  .ocr-drop svg { display: block; margin: 0 auto .6rem; }
+  .ocr-drop .drop-text { font-size: .95rem; color: var(--text); }
+  .ocr-drop .drop-hint { font-size: .8rem; color: var(--text2); margin-top: .25rem; }
+
+  .ocr-file-info {
+    display: none;
+    align-items: center;
+    gap: .75rem;
+    margin-top: 1rem;
+    padding: .75rem 1rem;
+    background: var(--surface2);
+    border-radius: var(--radius-sm);
+    font-size: .88rem;
+  }
+  .ocr-file-info.visible { display: flex; }
+  .ocr-file-info .f-name { flex: 1; word-break: break-all; }
+  .ocr-file-info .f-size { color: var(--text2); white-space: nowrap; }
+  .ocr-file-info .f-remove {
+    cursor: pointer; color: var(--text2); border: none; background: none;
+    font-size: 1.1rem; line-height: 1; padding: 0 .2rem;
+  }
+  .ocr-file-info .f-remove:hover { color: #dc2626; }
+  .ocr-thumb {
+    max-width: 96px; max-height: 64px; object-fit: contain;
+    border: 1px solid var(--border); border-radius: 4px; flex-shrink: 0;
+  }
+
+  .ocr-url-input {
+    width: 100%;
+    padding: .8rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: .9rem;
+    background: var(--surface);
+    color: var(--text);
+    outline: none;
+  }
+  .ocr-url-input:focus { border-color: var(--primary); }
+  .ocr-hint { font-size: .8rem; color: var(--text2); margin-top: .5rem; line-height: 1.6; }
+
+  .ocr-opts {
+    margin-top: 1.25rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+  }
+  .ocr-opts > summary {
+    padding: .85rem 1rem;
+    cursor: pointer;
+    font-size: .92rem;
+    font-weight: 600;
+    color: var(--text);
+    list-style: none;
+  }
+  .ocr-opts > summary::-webkit-details-marker { display: none; }
+  .ocr-opts > summary::before { content: "+"; margin-right: .5rem; color: var(--primary); font-weight: 700; }
+  .ocr-opts[open] > summary::before { content: "-"; }
+  .ocr-opts[open] > summary { border-bottom: 1px solid var(--border); }
+  .ocr-opts-body { padding: 1rem; }
+
+  .ocr-opt-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+    gap: .9rem 1rem;
+  }
+  .ocr-opt label {
+    display: block;
+    font-size: .8rem;
+    color: var(--text2);
+    margin-bottom: .35rem;
+    font-weight: 600;
+  }
+  .ocr-opt-hint { font-size: .74rem; color: var(--text2); line-height: 1.55; margin-top: .35rem; }
+
+  .ocr-checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .55rem 1.5rem;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+  .ocr-check {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    font-size: .88rem;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .ocr-check input { accent-color: var(--primary); width: 1rem; height: 1rem; cursor: pointer; }
+
+  .ocr-export {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    flex-wrap: wrap;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+  .ocr-export-label { font-size: .82rem; color: var(--text2); font-weight: 600; }
+  .ocr-chips { display: flex; gap: .45rem; flex-wrap: wrap; }
+  .ocr-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    padding: .42rem .8rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    font-size: .82rem;
+    color: var(--text2);
+    cursor: pointer;
+    user-select: none;
+  }
+  .ocr-chip input { accent-color: var(--primary); cursor: pointer; }
+  .ocr-chip.on { border-color: var(--primary); background: #eef2ff; color: var(--primary); font-weight: 600; }
+
+  .ocr-btns {
+    display: flex;
+    gap: .75rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 1.25rem;
+  }
+  #ocrPreviewBtn:disabled,
+  #ocrCopyAllBtn:disabled { opacity: .45; cursor: not-allowed; }
+
+  .ocr-modal-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: rgba(17, 24, 39, .55);
+  }
+  .ocr-modal {
+    display: flex;
+    flex-direction: column;
+    width: min(1000px, 100%);
+    max-height: 86vh;
+    background: var(--card, #fff);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: 0 18px 48px rgba(17, 24, 39, .22);
+    overflow: hidden;
+  }
+  .ocr-modal-head {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    padding: .85rem 1.1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .ocr-modal-head h2 { margin: 0; font-size: 1rem; }
+  .ocr-modal-sub {
+    flex: 1;
+    font-size: .78rem;
+    color: var(--text2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ocr-modal-x {
+    flex-shrink: 0;
+    padding: .3rem .7rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface, #f3f4f6);
+    color: var(--text2);
+    font-size: .8rem;
+    cursor: pointer;
+  }
+  .ocr-modal-x:hover { border-color: var(--primary); color: var(--primary); }
+  .ocr-modal-tabs { display: flex; gap: .35rem; padding: .6rem 1.1rem 0; flex-wrap: wrap; }
+  .ocr-pv-tab {
+    padding: .35rem .85rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface, #f3f4f6);
+    color: var(--text2);
+    font-size: .8rem;
+    cursor: pointer;
+  }
+  .ocr-pv-tab.on {
+    border-color: var(--primary);
+    background: #eef2ff;
+    color: var(--primary);
+    font-weight: 600;
+  }
+  .ocr-modal-body {
+    flex: 1;
+    overflow: auto;
+    padding: 1rem 1.1rem 1.1rem;
+    font-size: .88rem;
+  }
+  .ocr-pv-empty { color: var(--text2); padding: 1rem 0; text-align: center; }
+  .ocr-pv-pre {
+    margin: 0;
+    padding: .9rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface2, #f8fafc);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .8rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .ocr-pv-doc { max-width: 44rem; margin: 0 auto; line-height: 1.8; }
+  .ocr-pv-doc h4 { margin: 1rem 0 .35rem; font-size: 1.05rem; }
+  .ocr-pv-doc p { margin: .55rem 0; white-space: pre-wrap; word-break: break-word; }
+  .ocr-pv-doc ul { margin: .55rem 0; padding-left: 1.3rem; }
+  .ocr-pv-table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: .8rem 0;
+    font-size: .84rem;
+  }
+  .ocr-pv-table th,
+  .ocr-pv-table td {
+    border: 1px solid var(--border);
+    padding: .42rem .6rem;
+    text-align: left;
+  }
+  .ocr-pv-table th { background: var(--surface2, #f8fafc); font-weight: 600; }
+  .ocr-status {
+    margin-top: .9rem;
+    font-size: .88rem;
+    color: var(--text2);
+    min-height: 1.3em;
+    text-align: center;
+  }
+  .ocr-status.error { color: #dc2626; }
+  .ocr-status.success { color: var(--success); }
+  .ocr-progress {
+    display: none;
+    margin-top: 1.1rem;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--surface2);
+    overflow: hidden;
+  }
+  .ocr-progress.visible { display: block; }
+  .ocr-progress .fill {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, var(--primary), var(--accent));
+    transition: width .3s;
+  }
+
+  .ocr-result { display: none; margin-top: 1.5rem; }
+  .ocr-result.visible { display: block; }
+  .ocr-report { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .25rem; }
+  .ocr-report-sec { margin-top: 0; }
+  .ocr-badge {
+    font-size: .76rem;
+    padding: .26rem .62rem;
+    border-radius: 999px;
+    background: var(--surface2);
+    color: var(--text2);
+    white-space: nowrap;
+  }
+  .ocr-badge.key { background: #eef2ff; color: var(--primary); font-weight: 600; }
+
+  .ocr-section { margin-top: 1.25rem; }
+  .ocr-sec-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; }
+  .ocr-sec-head h2 { font-size: 1rem; font-weight: 600; margin-right: auto; }
+  .ocr-mini { padding: .3rem .8rem; font-size: .8rem; }
+  .ocr-text {
+    width: 100%;
+    min-height: 220px;
+    resize: vertical;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: .85rem 1rem;
+    font-size: .88rem;
+    line-height: 1.75;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .ocr-empty {
+    padding: 2.25rem 1rem;
+    text-align: center;
+    color: var(--text2);
+    background: var(--bg);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    font-size: .9rem;
+  }
+  .ocr-download-list { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .ocr-dl {
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    padding: .5rem .9rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--primary);
+    font-size: .85rem;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .ocr-dl:hover { border-color: var(--primary); background: #eef2ff; }
+  .ocr-redbox-link { display: inline-block; margin-bottom: .6rem; font-size: .85rem; color: var(--primary); font-weight: 600; }
+  .ocr-redbox-img {
+    display: block;
+    max-width: 100%;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: #fff;
+  }
+  .ocr-warnings {
+    margin-top: 1rem;
+    padding: .75rem 1rem;
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: var(--radius-sm);
+    font-size: .84rem;
+    color: #9a3412;
+  }
+  .ocr-warnings li { margin-left: 1.1rem; }
+</style>
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="/" class="nav-logo">FlowConvert</a>
+    <div class="nav-links">
+      <a href="/">格式转换</a>
+      <a href="/idphoto">证件照</a>
+      <a href="/translate">翻译</a>
+      <a href="/ocr" class="active">OCR 文字识别</a>
+      <a href="/video">视频生成</a>
+      <a href="/image">图像生成</a>
+      <a href="/about">常见问题</a>
+      <a href="/donate">赞赏支持</a>
+    </div>
+  </div>
+</nav>
+
+<main class="container page-content">
+  <div class="ocr-card">
+    <h1>OCR 文字识别</h1>
+    <div class="divider"></div>
+    <p class="ocr-intro">上传文件或粘贴文档链接，提取文字并按原版式导出，支持中英文混合与繁简转换</p>
+
+    <div class="ocr-src-tabs">
+      <button type="button" class="tab-btn active" id="tabFile">选择文件</button>
+      <button type="button" class="tab-btn" id="tabUrl">输入链接</button>
+    </div>
+
+    <div class="ocr-src-panel active" id="panelFile">
+      <div id="ocrDropZone" class="ocr-drop">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="1.5">
+          <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/>
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
+          <line x1="8" y1="7" x2="16" y2="7"/>
+          <line x1="8" y1="11" x2="16" y2="11"/>
+          <line x1="8" y1="15" x2="12" y2="15"/>
+        </svg>
+        <div class="drop-text">点击选择文件 或 拖拽到此处</div>
+        <div class="drop-hint">支持 PNG · JPG · BMP · GIF · WEBP · TIF · PDF，单文件不超过 50MB</div>
+        <input type="file" id="ocrFileInput" accept=".png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff,.pdf" hidden>
+      </div>
+
+      <div id="ocrFileInfo" class="ocr-file-info">
+        <img id="ocrThumb" class="ocr-thumb" style="display:none;" alt="文件缩略图">
+        <span id="ocrFileIcon" style="font-size:1.1rem;">PDF</span>
+        <span class="f-name" id="ocrFileName"></span>
+        <span class="f-size" id="ocrFileSize"></span>
+        <button type="button" class="f-remove" id="ocrFileRemove" title="移除文件">×</button>
+      </div>
+    </div>
+
+    <div class="ocr-src-panel" id="panelUrl">
+      <input id="ocrUrl" class="ocr-url-input" type="url" placeholder="https://example.com/report.pdf" spellcheck="false">
+      <p class="ocr-hint">填写公网可访问的图片或 PDF 直链地址，单文件不超过 50MB。无法访问内网地址，链接中的重定向次数最多 5 次。</p>
+    </div>
+
+    <details class="ocr-opts" open>
+      <summary>识别选项</summary>
+      <div class="ocr-opts-body">
+        <div class="ocr-opt-grid">
+          <div class="ocr-opt">
+            <label for="optMode">识别模式</label>
+            <select id="optMode" class="select">
+              <option value="general" selected>通用模式</option>
+              <option value="advanced">高级模式</option>
+            </select>
+            <p class="ocr-opt-hint">通用模式走轻量启发式版面分析，单页通常几秒；高级模式额外启用 PP-DocLayout + SLANeXt 神经表格结构识别，能还原表格行列，但单页可能耗时数分钟，低配环境建议用通用模式</p>
+          </div>
+          <div class="ocr-opt">
+            <label for="optQuality">识别质量</label>
+            <select id="optQuality" class="select">
+              <option value="normal" selected>标准（速度优先）</option>
+              <option value="high">高清（耗时稍长）</option>
+            </select>
+            <p class="ocr-opt-hint">高清模式会放大图片并启用更严格的前处理，适合小字号与低分辨率文件</p>
+          </div>
+          <div class="ocr-opt">
+            <label for="optCharset">输出字形</label>
+            <select id="optCharset" class="select">
+              <option value="auto" selected>自动检测</option>
+              <option value="zh_hans">简体中文</option>
+              <option value="zh_hant">繁体中文</option>
+            </select>
+            <p class="ocr-opt-hint">自动检测会判断原文字形并保持一致；选择简体或繁体时会统一转换输出</p>
+          </div>
+          <div class="ocr-opt">
+            <label for="optEngine">模型选择</label>
+            <select id="optEngine" class="select">
+              <option value="auto" selected>通用模型（推荐）</option>
+              <option value="tesseract">高级模型 Tesseract</option>
+              <option value="pp_ocr">PP-OCR 模型</option>
+            </select>
+            <p class="ocr-opt-hint">通用模型优先使用 Tesseract，不可用时自动回退到 PP-OCR；PDF 有文本层时直接无损提取。Tesseract 适合中英文混排的复杂版式；PP-OCR 为官方配套模型，中文识别准确率高、速度更快，并支持文字位置标注</p>
+          </div>
+          <div class="ocr-opt">
+            <label for="optLang">识别语言</label>
+            <select id="optLang" class="select">
+              <option value="auto" selected>中英自动（推荐）</option>
+              <option value="zh">中文</option>
+              <option value="en">English</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="de">Deutsch</option>
+              <option value="fr">Français</option>
+              <option value="es">Español</option>
+              <option value="ru">Русский</option>
+              <option value="multi">多语言混排</option>
+            </select>
+            <p class="ocr-opt-hint">选择文档的主要语言可显著提高识别准确率；多语言混排会同时加载中英日韩包，速度较慢</p>
+          </div>
+        </div>
+
+        <div class="ocr-checks">
+          <label class="ocr-check"><input type="checkbox" id="optRedbox"> 红框标记文字位置</label>
+          <label class="ocr-check"><input type="checkbox" id="optOptimize" checked> 文本优化（过滤页眉页脚）</label>
+          <label class="ocr-check"><input type="checkbox" id="optTranslate"> 翻译为简体中文</label>
+        </div>
+
+        <div class="ocr-export">
+          <span class="ocr-export-label">导出格式</span>
+          <div class="ocr-chips">
+            <label class="ocr-chip on"><input type="checkbox" class="fmt" value="txt" checked> TXT</label>
+            <label class="ocr-chip on"><input type="checkbox" class="fmt" value="docx" checked> Word</label>
+            <label class="ocr-chip on"><input type="checkbox" class="fmt" value="xlsx" checked> Excel</label>
+            <label class="ocr-chip on"><input type="checkbox" class="fmt" value="json" checked> JSON</label>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <div id="ocrProgress" class="ocr-progress"><div class="fill" id="ocrProgressFill"></div></div>
+
+    <div class="ocr-btns">
+      <button type="button" id="ocrBtn" class="btn btn-primary" style="min-width:180px;">开始识别</button>
+      <button type="button" id="ocrPreviewBtn" class="btn btn-secondary" style="min-width:110px;" disabled title="预览已识别导出的文件内容">预览</button>
+      <button type="button" id="ocrCopyAllBtn" class="btn btn-secondary" style="min-width:110px;" disabled title="复制已识别的文件内容">复制</button>
+      <button type="button" id="ocrResetBtn" class="btn btn-secondary" style="min-width:120px;">重置</button>
+    </div>
+
+    <div id="ocrStatus" class="ocr-status"></div>
+
+    <div id="ocrResult" class="ocr-result">
+      <div class="ocr-section ocr-report-sec">
+        <div class="ocr-sec-head">
+          <h2>识别结果汇报</h2>
+        </div>
+        <div class="ocr-report" id="ocrReport"></div>
+      </div>
+
+      <div class="ocr-section">
+        <div class="ocr-sec-head">
+          <h2>识别结果</h2>
+          <button type="button" class="btn btn-secondary ocr-mini" id="ocrCopyBtn">复制</button>
+        </div>
+        <textarea id="ocrText" class="ocr-text" readonly></textarea>
+        <div id="ocrEmpty" class="ocr-empty" style="display:none;"></div>
+      </div>
+
+      <div class="ocr-section" id="ocrTranslatedSec" style="display:none;">
+        <div class="ocr-sec-head">
+          <h2>简体中文翻译</h2>
+          <button type="button" class="btn btn-secondary ocr-mini" id="ocrCopyTransBtn">复制</button>
+        </div>
+        <textarea id="ocrTranslated" class="ocr-text" readonly></textarea>
+      </div>
+
+      <div class="ocr-section" id="ocrRedboxSec" style="display:none;">
+        <div class="ocr-sec-head">
+          <h2>红框标记图</h2>
+          <a class="btn btn-secondary ocr-mini" id="ocrRedboxLink" href="#" download="红框标记图.png">下载</a>
+        </div>
+        <img id="ocrRedboxImg" class="ocr-redbox-img" alt="文字位置红框标记图">
+      </div>
+
+      <div class="ocr-section" id="ocrDownloadsSec" style="display:none;">
+        <h2>原版式导出</h2>
+        <div class="ocr-download-list" id="ocrDownloadList"></div>
+      </div>
+
+      <div class="ocr-warnings" id="ocrWarnings" style="display:none;"></div>
+    </div>
+  </div>
+
+  <div id="ocrPreviewMask" class="ocr-modal-mask" style="display:none;" role="dialog" aria-modal="true" aria-label="识别结果预览">
+    <div class="ocr-modal">
+      <div class="ocr-modal-head">
+        <h2>识别结果预览</h2>
+        <span class="ocr-modal-sub" id="ocrPreviewSub"></span>
+        <button type="button" class="ocr-modal-x" id="ocrPreviewClose">关闭</button>
+      </div>
+      <div class="ocr-modal-tabs" id="ocrPreviewTabs"></div>
+      <div class="ocr-modal-body" id="ocrPreviewBody"></div>
+    </div>
+  </div>
+</main>
+
+<footer class="footer">
+  <p>FlowConvert &copy; 2026 · 基于 Rust + OpenCode 构建 · 反馈：647133036@qq.com · <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">桂ICP备2026011583号-1</a> · <a href="https://beian.mps.gov.cn/#/query/webSearch?code=桂公网安备45032302000244号" target="_blank" rel="noopener noreferrer">桂公网安备45032302000244号</a></p>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  function $(id) { return document.getElementById(id); }
+
+  var tabFile = $('tabFile'), tabUrl = $('tabUrl');
+  var panelFile = $('panelFile'), panelUrl = $('panelUrl');
+  var dropZone = $('ocrDropZone'), fileInput = $('ocrFileInput');
+  var fileInfo = $('ocrFileInfo'), fileNameEl = $('ocrFileName'), fileSizeEl = $('ocrFileSize');
+  var thumbEl = $('ocrThumb'), fileIconEl = $('ocrFileIcon'), fileRemove = $('ocrFileRemove');
+  var urlInput = $('ocrUrl');
+  var optMode = $('optMode'), optQuality = $('optQuality'), optCharset = $('optCharset');
+  var optEngine = $('optEngine'), optLang = $('optLang');
+  var optRedbox = $('optRedbox'), optOptimize = $('optOptimize'), optTranslate = $('optTranslate');
+  var fmtBoxes = Array.prototype.slice.call(document.querySelectorAll('.fmt'));
+  var btn = $('ocrBtn'), resetBtn = $('ocrResetBtn');
+  var statusEl = $('ocrStatus'), progressEl = $('ocrProgress'), progressFill = $('ocrProgressFill');
+  var resultEl = $('ocrResult'), reportEl = $('ocrReport');
+  var textEl = $('ocrText'), emptyEl = $('ocrEmpty');
+  var transSec = $('ocrTranslatedSec'), transEl = $('ocrTranslated');
+  var redboxSec = $('ocrRedboxSec'), redboxImg = $('ocrRedboxImg'), redboxLink = $('ocrRedboxLink');
+  var dlSec = $('ocrDownloadsSec'), dlList = $('ocrDownloadList');
+  var warnEl = $('ocrWarnings');
+  var copyBtn = $('ocrCopyBtn'), copyTransBtn = $('ocrCopyTransBtn');
+  var previewBtn = $('ocrPreviewBtn'), copyAllBtn = $('ocrCopyAllBtn');
+  var maskEl = $('ocrPreviewMask'), tabsEl = $('ocrPreviewTabs'), bodyEl = $('ocrPreviewBody'), subEl = $('ocrPreviewSub');
+  var previewCloseBtn = $('ocrPreviewClose');
+
+  var MAX_BYTES = 50 * 1024 * 1024;
+  var srcMode = 'file';
+  var selectedFile = null;
+  var previewURL = null;
+  var lastData = null;
+  var lastText = '';
+  var lastTrans = '';
+
+  var engineNames = { auto: '通用模型', tesseract: 'Tesseract', pp_ocr: 'PP-OCR', pdftext: 'PDF 文本层' };
+  var modeNames = { general: '通用模式', advanced: '高级模式' };
+  var qualityNames = { normal: '标准', high: '高清' };
+  var charsetNames = { auto: '自动检测', zh_hans: '简体中文', zh_hant: '繁体中文' };
+  var langNames = {
+    auto: '中英自动', zh: '中文', en: 'English', ja: '日本語', ko: '한국어',
+    de: 'Deutsch', fr: 'Français', es: 'Español', ru: 'Русский', multi: '多语言混排'
+  };
+  var fmtNames = { txt: 'TXT', docx: 'Word', xlsx: 'Excel', json: 'JSON', redbox: '红框图' };
+
+  function fmtSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function fmtElapsed(ms) {
+    if (!ms || ms <= 0) return '-';
+    if (ms < 1000) return ms + ' ms';
+    return (ms / 1000).toFixed(2) + ' s';
+  }
+
+  function setStatus(msg, kind) {
+    statusEl.textContent = msg || '';
+    statusEl.className = 'ocr-status' + (kind ? ' ' + kind : '');
+  }
+
+  function setSrcMode(mode) {
+    srcMode = mode;
+    tabFile.className = 'tab-btn' + (mode === 'file' ? ' active' : '');
+    tabUrl.className = 'tab-btn' + (mode === 'url' ? ' active' : '');
+    panelFile.className = 'ocr-src-panel' + (mode === 'file' ? ' active' : '');
+    panelUrl.className = 'ocr-src-panel' + (mode === 'url' ? ' active' : '');
+    setStatus('', '');
+  }
+
+  function showFile(file) {
+    if (previewURL) { URL.revokeObjectURL(previewURL); previewURL = null; }
+    if (!file) { clearFile(); return; }
+    if (file.size > MAX_BYTES) {
+      setStatus('文件超过 50MB 限制，请更换文件', 'error');
+      return;
+    }
+    selectedFile = file;
+    fileInfo.className = 'ocr-file-info visible';
+    fileNameEl.textContent = file.name;
+    fileSizeEl.textContent = fmtSize(file.size);
+
+    var isImage = (file.type && file.type.indexOf('image/') === 0) ||
+      /\.(png|jpe?g|bmp|gif|webp|tiff?)$/i.test(file.name || '');
+    if (isImage) {
+      previewURL = URL.createObjectURL(file);
+      thumbEl.src = previewURL;
+      thumbEl.style.display = 'inline-block';
+      fileIconEl.style.display = 'none';
+    } else {
+      thumbEl.style.display = 'none';
+      thumbEl.removeAttribute('src');
+      fileIconEl.style.display = 'inline';
+      fileIconEl.textContent = 'PDF';
+    }
+
+    dropZone.className = 'ocr-drop has-file';
+    dropZone.querySelector('.drop-text').textContent = '已选择文件，点击更换';
+    dropZone.querySelector('.drop-hint').textContent = '可点击此处或下方移除按钮重新选择';
+    setStatus('', '');
+  }
+
+  function clearFile() {
+    if (previewURL) { URL.revokeObjectURL(previewURL); previewURL = null; }
+    selectedFile = null;
+    fileInput.value = '';
+    fileInfo.className = 'ocr-file-info';
+    thumbEl.style.display = 'none';
+    thumbEl.removeAttribute('src');
+    dropZone.className = 'ocr-drop';
+    dropZone.querySelector('.drop-text').textContent = '点击选择文件 或 拖拽到此处';
+    dropZone.querySelector('.drop-hint').textContent = '支持 PNG · JPG · BMP · GIF · WEBP · TIF · PDF，单文件不超过 50MB';
+    setStatus('', '');
+  }
+
+  function readFormats() {
+    var out = [];
+    fmtBoxes.forEach(function (b) { if (b.checked) out.push(b.value); });
+    return out.length ? out : ['txt'];
+  }
+
+  function addBadge(parent, label, value, key) {
+    var span = document.createElement('span');
+    span.className = 'ocr-badge' + (key ? ' key' : '');
+    span.textContent = label + ': ' + value;
+    parent.appendChild(span);
+  }
+
+  function renderDownloads(list) {
+    dlList.textContent = '';
+    var nonImage = [];
+    list.forEach(function (item) {
+      if (item.type === 'redbox') {
+        redboxSec.style.display = '';
+        redboxImg.src = item.url;
+        redboxLink.href = item.url;
+        redboxLink.setAttribute('download', item.name || '红框标记图.png');
+        return;
+      }
+      nonImage.push(item);
+    });
+    nonImage.forEach(function (item) {
+      var a = document.createElement('a');
+      a.className = 'ocr-dl';
+      a.href = item.url;
+      a.setAttribute('download', item.name || '');
+      a.textContent = (fmtNames[item.type] || item.type) + ' · ' + (item.name || '');
+      dlList.appendChild(a);
+    });
+    if (nonImage.length) {
+      dlSec.style.display = '';
+    } else {
+      dlSec.style.display = 'none';
+    }
+  }
+
+  function hideResult() {
+    resultEl.className = 'ocr-result';
+    textEl.value = '';
+    transEl.value = '';
+    reportEl.textContent = '';
+    dlList.textContent = '';
+    emptyEl.style.display = 'none';
+    transSec.style.display = 'none';
+    redboxSec.style.display = 'none';
+    redboxImg.removeAttribute('src');
+    dlSec.style.display = 'none';
+    warnEl.style.display = 'none';
+    warnEl.textContent = '';
+    progressEl.className = 'ocr-progress';
+    progressFill.style.width = '0';
+    lastData = null;
+    lastText = '';
+    lastTrans = '';
+    previewBtn.disabled = true;
+    copyAllBtn.disabled = true;
+    closePreview();
+  }
+
+  function showResult(data) {
+    lastData = data;
+    lastText = data.text || '';
+    lastTrans = data.translated_text || '';
+    var opts = data.options || {};
+    var dl = data.downloads || [];
+    var fmts = dl.filter(function (d) { return d.type !== 'redbox'; })
+      .map(function (d) { return fmtNames[d.type] || d.type; });
+
+    resultEl.className = 'ocr-result visible';
+    reportEl.textContent = '';
+    addBadge(reportEl, '处理时间', fmtElapsed(data.elapsed_ms), true);
+    addBadge(reportEl, '识别模式', modeNames[opts.mode] || opts.mode || '-', true);
+    addBadge(reportEl, '识别质量', qualityNames[opts.quality] || opts.quality || '-');
+    addBadge(reportEl, '输出字形', charsetNames[opts.charset] || opts.charset || '-');
+    addBadge(reportEl, '识别语言', langNames[opts.lang] || opts.lang || '中英自动');
+    addBadge(reportEl, '模型', engineNames[opts.engine] || opts.engine || '-');
+    addBadge(reportEl, '输出格式', fmts.length ? fmts.join(' / ') : '仅文本', true);
+    addBadge(reportEl, '页数', data.pages || 1);
+    addBadge(reportEl, '字符数', data.chars || 0);
+    addBadge(reportEl, '识别来源', data.from_text_layer ? 'PDF 文本层' : '图像识别');
+    addBadge(reportEl, '过滤页眉页脚', (data.filtered_headers || []).length);
+
+    setResultActions(!data.empty);
+
+    if (data.empty) {
+      emptyEl.style.display = 'block';
+      emptyEl.textContent = '未识别到文字。请尝试更清晰的图片或 PDF，或切换到高级模型与高清质量。';
+      textEl.value = '';
+      copyBtn.style.display = 'none';
+    } else {
+      emptyEl.style.display = 'none';
+      textEl.value = lastText;
+      copyBtn.style.display = '';
+    }
+
+    if (lastTrans) {
+      transSec.style.display = '';
+      transEl.value = lastTrans;
+    } else {
+      transSec.style.display = 'none';
+    }
+
+    renderDownloads(dl);
+
+    var warnings = data.warnings || [];
+    if (warnings.length) {
+      warnEl.style.display = '';
+      warnEl.textContent = '';
+      var ul = document.createElement('ul');
+      warnings.forEach(function (msg) {
+        var li = document.createElement('li');
+        li.textContent = msg;
+        ul.appendChild(li);
+      });
+      warnEl.appendChild(ul);
+    } else {
+      warnEl.style.display = 'none';
+    }
+  }
+
+  var PREVIEW_TITLES = { txt: 'TXT', docx: 'Word', xlsx: 'Excel', json: 'JSON' };
+
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  function previewFormats(data) {
+    var list = (data.options && data.options.formats) || [];
+    if (!list.length) list = ['txt'];
+    return list.filter(function (f) { return f !== 'redbox'; });
+  }
+
+  function jsonPayload(data) {
+    return {
+      engine: data.engine,
+      pages: data.pages,
+      chars: data.chars,
+      charset: data.charset,
+      from_text_layer: data.from_text_layer,
+      layout: data.layout,
+      filtered_headers: data.filtered_headers || [],
+      options: data.options || {},
+      text: data.text || '',
+      translated_text: data.translated_text || '',
+      blocks: data.blocks || [],
+      lines: data.lines || []
+    };
+  }
+
+  function tableNode(cells, headerless) {
+    var table = el('table', 'ocr-pv-table');
+    (cells || []).forEach(function (row, idx) {
+      var tr = el('tr');
+      (row || []).forEach(function (cell) {
+        var tag = 'td';
+        if (!headerless && idx === 0) tag = 'th';
+        tr.appendChild(el(tag, null, cell == null ? '' : String(cell)));
+      });
+      table.appendChild(tr);
+    });
+    return table;
+  }
+
+  function emptyNote(wrap) {
+    wrap.appendChild(el('div', 'ocr-pv-empty', '未识别到内容'));
+    return wrap;
+  }
+
+  function renderTxt(data) {
+    var wrap = el('div');
+    if (!data.text) return emptyNote(wrap);
+    wrap.appendChild(el('pre', 'ocr-pv-pre', data.text));
+    return wrap;
+  }
+
+  function renderDocx(data) {
+    var wrap = el('div', 'ocr-pv-doc');
+    var blocks = data.blocks || [];
+    if (!blocks.length) {
+      if (!data.text) return emptyNote(wrap);
+      data.text.split('\n').forEach(function (line) { wrap.appendChild(el('p', null, line)); });
+      return wrap;
+    }
+    blocks.forEach(function (b) {
+      if (b.type === 'table') {
+        if (b.cells && b.cells.length) wrap.appendChild(tableNode(b.cells));
+      } else if (b.type === 'title') {
+        wrap.appendChild(el('h4', null, b.text || ''));
+      } else if (b.type === 'list') {
+        var ul = el('ul');
+        (b.lines || []).forEach(function (ln) { ul.appendChild(el('li', null, ln.text || '')); });
+        wrap.appendChild(ul);
+      } else {
+        wrap.appendChild(el('p', null, b.text || ''));
+      }
+    });
+    return wrap;
+  }
+
+  function renderXlsx(data) {
+    var wrap = el('div');
+    var tables = (data.blocks || []).filter(function (b) { return b.type === 'table' && b.cells && b.cells.length; });
+    if (tables.length) {
+      tables.forEach(function (b, idx) {
+        if (tables.length > 1) wrap.appendChild(el('h4', null, '表格 ' + (idx + 1)));
+        wrap.appendChild(tableNode(b.cells));
+      });
+      return wrap;
+    }
+    if (data.text) {
+      wrap.appendChild(tableNode(
+        data.text.split('\n').map(function (line) { return [line]; }), true
+      ));
+      return wrap;
+    }
+    return emptyNote(wrap);
+  }
+
+  function renderJson(data) {
+    var wrap = el('div');
+    wrap.appendChild(el('pre', 'ocr-pv-pre', JSON.stringify(jsonPayload(data), null, 2)));
+    return wrap;
+  }
+
+  var PREVIEW_RENDERERS = { txt: renderTxt, docx: renderDocx, xlsx: renderXlsx, json: renderJson };
+
+  function selectPreviewTab(active) {
+    Array.prototype.forEach.call(tabsEl.querySelectorAll('.ocr-pv-tab'), function (tab) {
+      tab.className = 'ocr-pv-tab';
+    });
+    active.className = 'ocr-pv-tab on';
+    bodyEl.textContent = '';
+    bodyEl.appendChild(PREVIEW_RENDERERS[active.getAttribute('data-fmt')](lastData));
+  }
+
+  function openPreview() {
+    if (!lastData) return;
+    var fmts = previewFormats(lastData);
+    tabsEl.textContent = '';
+    bodyEl.textContent = '';
+    subEl.textContent = fmts.map(function (f) { return PREVIEW_TITLES[f] || f; }).join(' / ');
+    fmts.forEach(function (fmt, idx) {
+      var tab = el('button', 'ocr-pv-tab' + (idx === 0 ? ' on' : ''), PREVIEW_TITLES[fmt] || fmt);
+      tab.type = 'button';
+      tab.setAttribute('data-fmt', fmt);
+      tab.addEventListener('click', function () { selectPreviewTab(tab); });
+      tabsEl.appendChild(tab);
+    });
+    var first = PREVIEW_RENDERERS[fmts[0]] || renderTxt;
+    bodyEl.appendChild(first(lastData));
+    maskEl.style.display = '';
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closePreview() {
+    maskEl.style.display = 'none';
+    document.body.style.overflow = '';
+  }
+
+  function setResultActions(enabled) {
+    previewBtn.disabled = !enabled;
+    copyAllBtn.disabled = !enabled;
+  }
+
+  function copyText(text, btnEl) {
+    if (!text) return;
+    var done = function () {
+      var orig = btnEl.textContent;
+      btnEl.textContent = '已复制';
+      setTimeout(function () { btnEl.textContent = orig; }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+
+  function fallbackCopy(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { /* 剪贴板不可用 */ }
+    document.body.removeChild(ta);
+  }
+
+  function submit() {
+    var urlStr = (urlInput.value || '').trim();
+    if (srcMode === 'file') {
+      if (!selectedFile) { setStatus('请先选择图片或 PDF 文件', 'error'); return; }
+    } else if (!urlStr) {
+      setStatus('请填写文档链接', 'error');
+      return;
+    }
+
+    hideResult();
+    btn.disabled = true;
+    btn.textContent = '识别中...';
+    progressEl.className = 'ocr-progress visible';
+    progressFill.style.width = '15%';
+    setStatus('正在识别，请稍候。高清质量或翻译可能需要较长时间...', '');
+
+    var formData = new FormData();
+    if (srcMode === 'file') {
+      formData.append('file', selectedFile);
+    } else {
+      formData.append('url', urlStr);
+    }
+    formData.append('mode', optMode.value);
+    formData.append('quality', optQuality.value);
+    formData.append('charset', optCharset.value);
+    formData.append('engine', optEngine.value);
+    formData.append('lang', optLang.value);
+    formData.append('redbox', optRedbox.checked ? '1' : '0');
+    formData.append('optimize', optOptimize.checked ? '1' : '0');
+    formData.append('translate', optTranslate.checked ? '1' : '0');
+    formData.append('formats', readFormats().join(','));
+
+    progressFill.style.width = '20%';
+    var startAt = Date.now();
+    var pollTimer = null;
+    function finishUI() {
+      btn.disabled = false;
+      btn.textContent = '开始识别';
+      setTimeout(function () {
+        progressEl.className = 'ocr-progress';
+        progressFill.style.width = '0';
+      }, 800);
+    }
+    function parseJSON(resp) {
+      var ct = (resp.headers.get('content-type') || '').toLowerCase();
+      if (ct.indexOf('application/json') === -1) {
+        return resp.text().then(function () {
+          throw new Error('识别超时或网关中断，请稍后重试');
+        });
+      }
+      return resp.json();
+    }
+    function tickProgress() {
+      var sec = (Date.now() - startAt) / 1000;
+      var pct = Math.min(90, 20 + sec * 0.23);
+      progressFill.style.width = pct + '%';
+      if (sec < 30) {
+        setStatus('正在排队并启动识别... ' + Math.floor(sec) + 's', '');
+      } else if (sec < 180) {
+        setStatus('正在识别文字与版面，扫描件约需数分钟... ' + Math.floor(sec) + 's', '');
+      } else {
+        setStatus('表格结构识别中，请继续等待... ' + Math.floor(sec) + 's', '');
+      }
+    }
+    fetch('/api/ocr', { method: 'POST', body: formData })
+      .then(function (resp) { return parseJSON(resp); })
+      .then(function (data) {
+        if (!data.success || !data.task_id) {
+          throw new Error(data.error || '提交识别任务失败');
+        }
+        return new Promise(function (resolve, reject) {
+          var attempts = 0;
+          function poll() {
+            attempts += 1;
+            tickProgress();
+            fetch('/api/ocr/task/' + data.task_id)
+              .then(function (resp) { return parseJSON(resp); })
+              .then(function (sdata) {
+                if (sdata.status === 'completed' && sdata.result) {
+                  resolve(sdata.result);
+                  return;
+                }
+                if (sdata.status === 'failed' || sdata.success === false) {
+                  reject(new Error(sdata.error || '识别失败'));
+                  return;
+                }
+                if (attempts >= 180) {
+                  reject(new Error('识别超时，请稍后重试'));
+                  return;
+                }
+                pollTimer = setTimeout(poll, 3000);
+              })
+              .catch(function (err) {
+                if (attempts >= 180) {
+                  reject(err);
+                  return;
+                }
+                pollTimer = setTimeout(poll, 3000);
+              });
+          }
+          poll();
+        });
+      })
+      .then(function (data) {
+        progressFill.style.width = '100%';
+        showResult(data);
+        setStatus(data.empty ? '识别完成，但未找到文字' : '识别完成', 'success');
+        resultEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      })
+      .catch(function (err) {
+        if (pollTimer) clearTimeout(pollTimer);
+        setStatus((err && err.message) ? err.message : '识别失败', 'error');
+      })
+      .then(function () {
+        if (pollTimer) clearTimeout(pollTimer);
+        finishUI();
+      });
+  }
+
+  tabFile.addEventListener('click', function () { setSrcMode('file'); });
+  tabUrl.addEventListener('click', function () { setSrcMode('url'); });
+
+  dropZone.addEventListener('click', function () { fileInput.click(); });
+  fileInput.addEventListener('change', function (e) {
+    if (e.target.files && e.target.files[0]) showFile(e.target.files[0]);
+  });
+  fileRemove.addEventListener('click', function (e) { e.stopPropagation(); clearFile(); });
+
+  ['dragenter', 'dragover'].forEach(function (evt) {
+    dropZone.addEventListener(evt, function (e) {
+      e.preventDefault();
+      dropZone.classList.add('drag-over');
+    });
+  });
+  ['dragleave', 'drop'].forEach(function (evt) {
+    dropZone.addEventListener(evt, function (e) {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+    });
+  });
+  dropZone.addEventListener('drop', function (e) {
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) showFile(e.dataTransfer.files[0]);
+  });
+
+  fmtBoxes.forEach(function (box) {
+    box.addEventListener('change', function () {
+      box.closest('.ocr-chip').className = 'ocr-chip' + (box.checked ? ' on' : '');
+    });
+  });
+
+  btn.addEventListener('click', submit);
+  resetBtn.addEventListener('click', function () {
+    clearFile();
+    urlInput.value = '';
+    hideResult();
+    setStatus('', '');
+  });
+  copyBtn.addEventListener('click', function () { copyText(lastText, copyBtn); });
+  copyTransBtn.addEventListener('click', function () { copyText(lastTrans, copyTransBtn); });
+  previewBtn.addEventListener('click', openPreview);
+  copyAllBtn.addEventListener('click', function () { copyText(lastText, copyAllBtn); });
+  previewCloseBtn.addEventListener('click', closePreview);
+  maskEl.addEventListener('click', function (e) { if (e.target === maskEl) closePreview(); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && maskEl.style.display !== 'none') closePreview();
+  });
+})();
+</script>
+</body>
+</html>
