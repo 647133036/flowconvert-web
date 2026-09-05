@@ -85,6 +85,51 @@ HEADER_TITLE_WORDS = re.compile(
 CJK_TOKEN_CAP = 10
 REDBOX_MAX_PAGES = 12
 
+ROMAN_CHARS = "IVXLCDM"
+ROMAN_PAIRS = (
+    ("M", 1000), ("CM", 900), ("D", 500), ("CD", 400),
+    ("C", 100), ("XC", 90), ("L", 50), ("XL", 40),
+    ("X", 10), ("IX", 9), ("V", 5), ("IV", 4), ("I", 1),
+)
+
+# 简体文档里出现这些字说明 chi_tra 模型抢了识别，需要换 chi_sim 重跑该行。
+TRAD_MARKERS = set(
+    "長對話題讀滿給項選個說後內請聽寫單轉換識運兩這從錄數總過還進遠題讀話"
+)
+
+
+def _roman_to_int(text):
+    total, i = 0, 0
+    while i < len(text):
+        for sym, val in ROMAN_PAIRS:
+            if text[i:i + len(sym)] == sym:
+                total += val
+                i += len(sym)
+                break
+    return total
+
+
+def _int_to_roman(value):
+    out = ""
+    for sym, val in ROMAN_PAIRS:
+        while value >= val:
+            out += sym
+            value -= val
+    return out
+
+
+def is_valid_roman(text):
+    """是否为 1..3999 的规范罗马数字写法(拒绝 IIII / VV / IXX 之类)。"""
+    if not text or len(text) > 4 or any(ch not in ROMAN_CHARS for ch in text):
+        return False
+    value = _roman_to_int(text)
+    return value >= 1 and _int_to_roman(value) == text
+
+
+def _strip_roman_punct(text):
+    return "".join(ch for ch in text if ch in ROMAN_CHARS)
+
+
 
 @dataclass
 class Word:
@@ -255,6 +300,8 @@ class TesseractEngine:
             raise RuntimeError(f"tesseract 不可用: {exc}") from exc
 
         self.lang = self._pick_lang(lang, mode, langs)
+        # 中文行会用单语言模型再跑一遍：多语言组合会把简体读成繁体并夹杂拉丁乱码
+        self.cjk_lang = next((c for c in ("chi_sim", "chi_tra") if c in langs), None)
 
         self.profile = QUALITY_PROFILE.get(quality, QUALITY_PROFILE["normal"])
         self.dpi = self.profile["dpi"]
@@ -293,12 +340,13 @@ class TesseractEngine:
         factor = min(int(round(max_width / float(w))), 4)
         return cv2.resize(gray, (w * factor, h * factor), interpolation=cv2.INTER_CUBIC)
 
-    def _run_psm(self, img, psm, lang):
+    def _run_psm(self, img, psm, lang, extra=""):
         """Run one tesseract PSM pass and return the recognized words."""
         import pytesseract
 
+        config = f"--psm {psm} {extra}".strip()
         data = pytesseract.image_to_data(
-            img, lang=lang, config=f"--psm {psm}", output_type=pytesseract.Output.DICT
+            img, lang=lang, config=config, output_type=pytesseract.Output.DICT
         )
         words = []
         for i, raw in enumerate(data["text"]):
@@ -349,8 +397,261 @@ class TesseractEngine:
             if score > best_score or (score == best_score and len(words) > len(best)):
                 best, best_score = words, score
             if score >= 0.6 and len(words) >= 20:
-                return best
-        return best
+                return self.refine_words(gray, best)
+        return self.refine_words(gray, best)
+
+    def _crop_words(self, gray, x0, y0, x1, y1, psm, lang, fx=1.0, extra=""):
+        """在 gray 上裁一块按指定语言重识别，返回坐标已还原到全图的 words。"""
+        import cv2
+        from PIL import Image
+
+        xa = max(int(x0), 0)
+        ya = max(int(y0), 0)
+        xb = min(int(x1), gray.shape[1])
+        yb = min(int(y1), gray.shape[0])
+        if xb <= xa or yb <= ya:
+            return []
+        sub = gray[ya:yb, xa:xb]
+        if fx != 1.0:
+            sub = cv2.resize(sub, None, fx=fx, fy=fx, interpolation=cv2.INTER_CUBIC)
+        scale = fx if fx >= 1.0 else 1.0
+        words = self._run_psm(Image.fromarray(sub), psm, lang, extra=extra)
+        for w in words:
+            w.x = xa + int(w.x / scale)
+            w.y = ya + int(w.y / scale)
+            w.w = max(int(w.w / scale), 1)
+            w.h = max(int(w.h / scale), 1)
+            w.size = float(w.h)
+        return words
+
+    @staticmethod
+    def _ink(gray):
+        import cv2
+
+        return cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+
+    @staticmethod
+    def _components(bw):
+        """返回按 x 排序的有效连通域 (x, y, w, h, area)。"""
+        import cv2
+
+        n, _lab, stats, _cent = cv2.connectedComponentsWithStats(bw, 8)
+        comps = []
+        for i in range(1, n):
+            x, y, w, h, a = (int(v) for v in stats[i])
+            if a < 8 or h < 6:
+                continue
+            comps.append((x, y, w, h, a))
+        comps.sort()
+        return comps
+
+    @staticmethod
+    def _looks_cjk(bw, words):
+        """按字形宽高比判别一行墨迹是否以中文为主。
+
+        中文方块字近似正方形(w/h≈0.85 以上)，拉丁字母偏窄(≈0.6~0.8)；
+        墨迹形状判不出来时退回文本里的中文占比。
+        """
+        comps = TesseractEngine._components(bw)
+        if not comps:
+            return False
+        ratios = sorted(c[2] / max(c[3], 1) for c in comps)
+        if ratios[len(ratios) // 2] >= 0.82:
+            return True
+        text = "".join(w.text for w in words)
+        nsp = sum(1 for ch in text if not ch.isspace())
+        cjk = sum(1 for ch in text if _is_cjk(ch))
+        return nsp >= 4 and cjk / nsp >= 0.20
+
+    @staticmethod
+    def _cjk_block_x(bw, xa, xb, ya, yb):
+        """行区内首个中文方块字形的左边界（全图 px），找不到返回 None。
+
+        中文方块字 w/h≈0.9 且内部填充率高；罗马数字竖条窄、V 形填充率低，都能被排除，
+        因此这个边界不依赖 OCR 词框，首遍识别把中文读成拉丁乱码时依然可用。
+        """
+        sub = bw[max(ya, 0):max(yb, 0), max(xa, 0):min(xb, bw.shape[1])]
+        if sub.size == 0:
+            return None
+        ox = max(xa, 0)
+        for x, y, w, h, a in TesseractEngine._components(sub):
+            if h >= 8 and w >= 0.85 * h and a >= 0.30 * w * h:
+                return ox + x
+        return None
+
+    @staticmethod
+    def _dmg(text):
+        """统计一行文本的识别损伤：拉丁字母数 + 繁体字个数。"""
+        latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
+        trad = sum(1 for ch in text if ch in TRAD_MARKERS)
+        return latin + trad
+
+    def _line_roman_head(self, gray, bw, ln):
+        """行首是否为罗马数字章节号。命中返回 (roman, x_cjk, head_words)。"""
+        items = sorted(ln.words, key=lambda w: w.x)
+        xa, xb = ln.x - 2, ln.x + ln.w + 2
+        ya, yb = ln.y - 2, ln.y + ln.h + 2
+        x_cjk = self._cjk_block_x(bw, xa, xb, ya, yb)
+        if x_cjk is None:
+            return None
+        line_crop = bw[max(ya, 0):max(yb, 0), max(xa, 0):min(xb, bw.shape[1])]
+        if line_crop.size == 0 or not self._looks_cjk(line_crop, ln.words):
+            return None
+        prefix_w = x_cjk - xa
+        if prefix_w < 4 or prefix_w > 0.18 * max(ln.w, 1):
+            return None
+        roman = self._roman_prefix(gray, bw, xa, ln.y, ln.h, x_cjk)
+        if not roman:
+            return None
+        # 词框常越界吞掉后面的中文字，所以按起点而非终点判断行首
+        head_words = [w for w in items if w.x < x_cjk]
+        if not head_words:
+            return None
+        return roman, x_cjk, head_words
+
+    def _refine_roman_prefixes(self, gray, bw, words):
+        """“III. 标题”这类行首的罗马序号常被读成 HI, / V1, 单独裁前缀重识别。"""
+        out = list(words)
+        for ln in cluster_lines(out):
+            hit = self._line_roman_head(gray, bw, ln)
+            if not hit:
+                continue
+            roman, x_cjk, head_words = hit
+            if roman == _strip_roman_punct(head_words[0].text):
+                continue
+            head_words[0].text = roman + "."
+            head_words[0].w = max(int(x_cjk - head_words[0].x), 1)
+            head_words[0].size = float(head_words[0].h)
+            drop = {id(w) for w in head_words[1:]}
+            out = [w for w in out if id(w) not in drop]
+        return out
+
+    def _refine_cjk_lines(self, gray, bw, words):
+        """中文为主的行用 chi_sim 单语言模型重识别，避免繁体错字与拉丁乱码。
+
+        行首罗马序号已单独校正过，重识别的裁剪区间从首个中文字形开始，
+        否则整行重跑会把刚修好的章节号再读丢。只有首遍结果确实损伤
+        （混入拉丁字母或繁体字）的行才尝试重跑，避免把已读对的行改坏。
+        """
+        if not self.cjk_lang:
+            return words
+        out = []
+        for ln in cluster_lines(words):
+            orig = ln.words
+            xa, keep = ln.x - 2, []
+            x_cjk = self._cjk_block_x(bw, xa, ln.x + ln.w + 2, ln.y - 2, ln.y + ln.h + 2)
+            if x_cjk is not None and x_cjk - xa > 4:
+                xa = x_cjk
+                keep = [w for w in orig if w.x < xa]
+            keep_ids = {id(w) for w in keep}
+            rest = [w for w in orig if id(w) not in keep_ids]
+            crop = bw[max(ln.y - 2, 0):max(ln.y + ln.h + 2, 0),
+                      max(xa, 0):min(ln.x + ln.w + 2, bw.shape[1])]
+            old_text = "".join(w.text for w in rest)
+            if crop.size == 0 or not self._looks_cjk(crop, rest) or self._dmg(old_text) < 2:
+                out.extend(orig)
+                continue
+            cand = self._crop_words(
+                gray, xa, ln.y - 2, ln.x + ln.w + 2, ln.y + ln.h + 2, 7, self.cjk_lang)
+            if not cand:
+                out.extend(orig)
+                continue
+            cand_text = "".join(w.text for w in cand)
+            n_old = sum(1 for ch in old_text if _is_cjk(ch))
+            n_new = sum(1 for ch in cand_text if _is_cjk(ch))
+            if self._dmg(cand_text) < self._dmg(old_text) or n_new > n_old:
+                out.extend(keep + cand)
+            else:
+                out.extend(orig)
+        if not out:
+            return words
+        out.sort(key=lambda w: (w.y, w.x))
+        return out
+
+    def refine_words(self, gray, words):
+        """首遍结果的两处定向修补：章节罗马序号还原、中文行单语言重识别。"""
+        if not words:
+            return words
+        bw = self._ink(gray)
+        words = self._refine_roman_prefixes(gray, bw, words)
+        return self._refine_cjk_lines(gray, bw, words)
+
+
+    @staticmethod
+    def _roman_shapes(comps, med_h, dot_area):
+        """判断前缀墨迹是否只有罗马字符形状（竖条 / 低填充 V 形 / 句点）。
+
+        中文字符会被切成多块笔画，横向互相重叠且填充率高，
+        而罗马序号的笔画彼此分开、填充率很低，这两点合起来能排除误判。
+        """
+        prev_end = -1
+        for x, y, w, ch, a in comps:
+            if x < prev_end:
+                return False
+            prev_end = x + w
+            if a < dot_area and ch < 0.45 * med_h:
+                continue
+            if w / max(ch, 1) <= 0.45 and ch >= 0.55 * med_h:
+                continue
+            if w >= 0.5 * med_h and a / float(w * max(ch, 1)) > 0.32:
+                return False
+        return True
+
+    def _roman_prefix(self, gray, bw, x_start, y_top, h, x_stop):
+        """还原 [x_start, x_stop) 内的罗马数字章节号。
+
+        I 形竖条按连通域数量直接计数（III 这类竖线序列 tesseract 会并成一个字符），
+        其余笔画单独裁剪后按罗马字符白名单识别。
+        """
+        import cv2
+
+        xa = max(int(x_start) - 2, 0)
+        xb = min(int(x_stop) - 2, bw.shape[1])
+        ya = max(int(y_top) - 4, 0)
+        yb = min(int(y_top + h) + 4, bw.shape[0])
+        if xb <= xa or yb <= ya:
+            return ""
+        comps = self._components(bw[ya:yb, xa:xb])
+        if not comps:
+            return ""
+        heights = sorted(c[3] for c in comps)
+        med_h = heights[len(heights) // 2]
+        dot_area = 0.12 * med_h * med_h
+        cjk_area = 0.5 * med_h * med_h
+        if not self._roman_shapes(comps, med_h, dot_area):
+            return ""
+        segments = []
+        for x, y, w, ch, a in comps:
+            if a < dot_area or ch < 0.4 * med_h:
+                continue
+            if w / max(ch, 1) <= 0.45 and ch >= 0.55 * med_h:
+                segments.append(("I", None))
+            elif w >= 0.85 * med_h and a >= cjk_area:
+                continue
+            else:
+                segments.append(("", (x, y, w, ch)))
+        if not segments:
+            return ""
+        out = []
+        for token, box in segments:
+            if token:
+                out.append(token)
+                continue
+            gx, gy, gw, gh = box
+            sub = gray[max(ya + gy - 3, 0):min(ya + gy + gh + 3, gray.shape[0]),
+                       max(xa + gx - 3, 0):min(xa + gx + gw + 3, gray.shape[1])]
+            if sub.size == 0:
+                return ""
+            up = cv2.resize(sub, None, fx=4.0, fy=4.0, interpolation=cv2.INTER_CUBIC)
+            found = self._crop_words(up, 0, 0, up.shape[1], up.shape[0], 7, "eng",
+                                     extra=f"-c tessedit_char_whitelist={ROMAN_CHARS}")
+            got = _strip_roman_punct("".join(i.text for i in found))
+            if not got:
+                return ""
+            out.append(got)
+        roman = "".join(out)
+        return roman if is_valid_roman(roman) else ""
+
 
 
 class PPocREngine:
