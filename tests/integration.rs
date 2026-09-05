@@ -8,7 +8,7 @@ use tower::ServiceExt;
 
 use flowconvert::config::Config;
 use flowconvert::middleware::{RateLimiter, security_headers};
-use flowconvert::store::{FileStore, VideoJobStore};
+use flowconvert::store::{FileStore, OcrJobStore, VideoJobStore};
 use flowconvert::AppState;
 
 fn make_app() -> Router {
@@ -35,11 +35,13 @@ fn make_app() -> Router {
     let limiter = RateLimiter::new(100);
     let file_store = FileStore::new(out_dir, 1);
     let video_jobs = VideoJobStore::new(60);
+    let ocr_jobs = OcrJobStore::new(30);
 
     let state = AppState {
         config: Arc::new(cfg),
         file_store,
         video_jobs,
+        ocr_jobs,
         client: None,
     };
 
@@ -72,7 +74,12 @@ fn make_app() -> Router {
         .route("/api/convert/image/compose", post(flowconvert::handler::imagegen::handle_compose_image))
         .route("/api/convert/video/text", post(flowconvert::handler::videogen::handle_text_video))
         .route("/api/convert/sketch", post(flowconvert::handler::convert::handle_sketch))
-        .route("/api/convert/pdf-to-office", post(flowconvert::handler::convert::handle_pdf_to_office));
+        .route("/api/convert/pdf-to-office", post(flowconvert::handler::convert::handle_pdf_to_office))
+        .route("/api/ocr", post(flowconvert::handler::ocr::handle_ocr))
+        .route(
+            "/api/ocr/task/{id}",
+            get(flowconvert::handler::ocr::handle_ocr_task),
+        );
 
     Router::new()
         .merge(api)
@@ -475,30 +482,202 @@ async fn test_get_index_html() {
     assert_eq!(resp.status(), 200);
 }
 
+#[tokio::test]
+async fn test_ocr_task_unknown_returns_404() {
+    let app = make_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/ocr/task/nonexistent-id")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_ocr_without_source_returns_400() {
+    let app = make_app();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/ocr")
+                .header("Content-Type", "multipart/form-data; boundary=----WebKitFormBoundary")
+                .body(Body::from(
+                    "------WebKitFormBoundary\r\n\
+                     Content-Disposition: form-data; name=\"formats\"\r\n\r\ntxt\r\n\
+                     ------WebKitFormBoundary--\r\n",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_ocr_invalid_ext_returns_400() {
+    let app = make_app();
+    let png = create_test_png();
+    let body = multipart_body(&[("file", Some("bad.exe"), Some("image/png"), &png)], &[]);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/ocr")
+                .header("Content-Type", "multipart/form-data; boundary=----WebKitFormBoundary")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_ocr_upload_runs_and_completes() {
+    let app = make_app();
+    let png = create_test_png();
+    let body = multipart_body(&[("file", Some("blank.png"), Some("image/png"), &png)], &[("formats", "txt")]);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/ocr")
+                .header("Content-Type", "multipart/form-data; boundary=----WebKitFormBoundary")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let payload = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+    let task_id = json["task_id"].as_str().expect("task_id").to_string();
+    assert!(json["success"].as_bool().unwrap_or(false));
+
+    let mut status = String::new();
+    for _ in 0..240 {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let r = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/ocr/task/{}", task_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+        let p = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&p).unwrap();
+        status = v["status"].as_str().unwrap_or("running").to_string();
+        if status != "running" {
+            eprintln!("OCR TASK DEBUG: {}", serde_json::to_string(&v).unwrap_or_default());
+            break;
+        }
+    }
+    assert_eq!(status, "completed", "OCR task did not finish in time");
+
+    let r = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/ocr/task/{}", task_id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let p = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&p).unwrap();
+    assert!(v["result"]["success"].as_bool().unwrap_or(false));
+    assert!(v["result"]["text"].is_string());
+    assert!(v["result"]["elapsed_ms"].is_i64());
+    assert!(v["result"]["downloads"].is_array());
+}
+
+/// Build a multipart body with the fixed test boundary, keeping file bytes intact.
+fn multipart_body(
+    files: &[(&str, Option<&str>, Option<&str>, &[u8])],
+    fields: &[(&str, &str)],
+) -> Vec<u8> {
+    const B: &[u8] = b"------WebKitFormBoundary";
+    let mut out = Vec::new();
+    for (name, file_name, content_type, data) in files {
+        out.extend_from_slice(B);
+        out.extend_from_slice(b"\r\n");
+        if let Some(fn_) = file_name {
+            out.extend_from_slice(format!("Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n", name, fn_).as_bytes());
+        } else {
+            out.extend_from_slice(format!("Content-Disposition: form-data; name=\"{}\"\r\n", name).as_bytes());
+        }
+        if let Some(ct) = content_type {
+            out.extend_from_slice(format!("Content-Type: {}\r\n", ct).as_bytes());
+        }
+        out.extend_from_slice(b"\r\n");
+        out.extend_from_slice(data);
+        out.extend_from_slice(b"\r\n");
+    }
+    for (name, value) in fields {
+        out.extend_from_slice(B);
+        out.extend_from_slice(b"\r\n");
+        out.extend_from_slice(format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", name).as_bytes());
+        out.extend_from_slice(value.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(B);
+    out.extend_from_slice(b"--\r\n");
+    out
+}
+
+fn append_png_chunk(out: &mut Vec<u8>, name: &[u8], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(name);
+    out.extend_from_slice(data);
+    let mut crc_src = Vec::with_capacity(name.len() + data.len());
+    crc_src.extend_from_slice(name);
+    crc_src.extend_from_slice(data);
+    out.extend_from_slice(&crc32fast::hash(&crc_src).to_be_bytes());
+}
+
 fn create_test_png() -> Vec<u8> {
-    // Write minimal valid 1x1 red PNG directly
-    // PNG signature + IHDR + IDAT + IEND for a 1x1 red pixel
-    let mut data = Vec::new();
-    // PNG signature
-    data.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-    // IHDR: width=1, height=1, bit_depth=8, color_type=2 (RGB), compression=0, filter=0, interlace=0
-    let ihdr_data: &[u8] = &[0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0];
-    let ihdr_crc = crc32fast::hash(ihdr_data);
-    data.extend_from_slice(&[0, 0, 0, 13]); // length
-    data.extend_from_slice(b"IHDR");
-    data.extend_from_slice(ihdr_data);
-    data.extend_from_slice(&ihdr_crc.to_be_bytes());
-    // IDAT: filter byte 0 + RGB (255,0,0) for 1 pixel, deflate compressed
-    // Minimal zlib stream for filtered 1x1 RGB
-    data.extend_from_slice(&[0, 0, 0, 5]); // length
-    data.extend_from_slice(b"IDAT");
-    // zlib compressed minimal scanline: filter=0, R=255, G=0, B=0
-    data.extend_from_slice(&[0x08, 0x90, 0x03, 0x00, 0x00]); // minimal zlib
-    let idat_crc = crc32fast::hash(&data[data.len() - 5..data.len()]);
-    data.extend_from_slice(&idat_crc.to_be_bytes());
-    // IEND
-    data.extend_from_slice(&[0, 0, 0, 0]);
-    data.extend_from_slice(b"IEND");
-    data.extend_from_slice(&crc32fast::hash(b"IEND").to_be_bytes());
-    data
+    // Solid 40x30 RGB image; the IDAT uses a real zlib stored block so PIL
+    // can actually decode it (hand-rolled deflate bytes are not decodable).
+    const W: usize = 40;
+    const H: usize = 30;
+
+    let mut scan = Vec::with_capacity(H * (1 + W * 3));
+    for _ in 0..H {
+        scan.push(0);
+        for _ in 0..W {
+            scan.extend_from_slice(&[255u8, 255, 255]);
+        }
+    }
+
+    let mut zlib = Vec::with_capacity(scan.len() + 6);
+    zlib.extend_from_slice(&[0x78, 0x01]);
+    zlib.push(0x01);
+    zlib.extend_from_slice(&((scan.len() & 0xFFFF) as u16).to_le_bytes());
+    zlib.extend_from_slice(&(!((scan.len() & 0xFFFF) as u16)).to_le_bytes());
+    zlib.extend_from_slice(&scan);
+
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&(W as u32).to_be_bytes());
+    ihdr.extend_from_slice(&(H as u32).to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+
+    let mut out = Vec::new();
+    out.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+    append_png_chunk(&mut out, b"IHDR", &ihdr);
+    append_png_chunk(&mut out, b"IDAT", &zlib);
+    append_png_chunk(&mut out, b"IEND", b"");
+    out
 }

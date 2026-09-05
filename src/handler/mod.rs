@@ -1,6 +1,7 @@
 pub mod convert;
 pub mod download;
 pub mod imagegen;
+pub mod ocr;
 pub mod pages;
 pub mod translate;
 pub mod videogen;

@@ -128,6 +128,16 @@ Entries discovered by the Agent during task execution should follow this format:
 - 运行命令: `./flowConvert`
 - 默认监听端口: 8080
 - 测试命令: `go test ./...`
+- Rust 侧（src/，与 Go 并行的 axum 重写）: 检查 `cargo check --lib`，单元测试 `cargo test --lib`，集成测试 `cargo test --test integration`，构建 `cargo build`
+- Rust 工具链不在环境 PATH 里，已装在 /root/.cargo/bin/cargo 与 /root/.rustup，调用时用全路径；首次 `rustup default stable` 需联网下载工具链
+- 集成测试在 tests/integration.rs 里自建 AppState，给 AppState 加字段（如 ocr_jobs）后必须同步更新该构造，否则集成测试编译失败
+- Rust 单元测试通过 `cargo test --lib` 才能覆盖（handler/ocr.rs、service/ocr.rs 的测试都在 lib 内），跑 `--test integration` 不会执行它们
+
+## 排查与调试
+
+- tests/integration.rs 里的 `create_test_png` 早期版本手写 IDAT 的 zlib 字节（`0x08 0x90 0x03 0x00 0x00`）并非合法 deflate 流，文件能存盘但 PIL 报 `cannot identify image file`，表现为 OCR 任务 1-2 秒内失败（python 启动即报错），容易被误判为 handler 或脚本 bug
+- 排查这类「秒失败」时先看服务端 `eprintln!`/日志里的 `run_err` 全文，OCR 任务接口的 error 字段是脱敏文案「识别失败，请稍后重试」，不含真实原因
+- 手写 PNG 的正确做法：IDAT 用 zlib stored block（`78 01 01` + LEN/NLEN 小端 + 原始扫描线），CRC 必须对「块类型名 + 数据」计算，见 `append_png_chunk`
 
 ## 项目依赖
 

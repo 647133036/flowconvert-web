@@ -1,6 +1,7 @@
 pub mod aiclient;
 pub mod fetch;
 pub mod idphoto;
+pub mod ocr;
 pub mod imagegen;
 pub mod pdfoffice;
 pub mod sketch;
@@ -10,7 +11,7 @@ pub mod videogen;
 
 pub use aiclient::AIClient;
 pub use vectorize::{vectorize, ToolAvailability, VecParams, detect_tools};
-pub use fetch::fetch_image;
+pub use fetch::{fetch_doc, fetch_image};
 pub use translate::{translate_text, translate_file};
 pub use pdfoffice::{pdf_to_office, pdf_to_markdown};
 pub use sketch::make_sketch;

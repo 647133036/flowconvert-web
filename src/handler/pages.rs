@@ -7,13 +7,14 @@ use include_dir::{include_dir, Dir};
 /// Embedded frontend assets (mirrors Go web.Assets embed).
 static WEB: Dir = include_dir!("$CARGO_MANIFEST_DIR/web");
 
-const PAGES: [(&str, &str); 8] = [
+const PAGES: [(&str, &str); 9] = [
     ("/", "index.html"),
     ("/index.html", "index.html"),
     ("/idphoto", "idphoto.html"),
     ("/translate", "translate.html"),
     ("/video", "video.html"),
     ("/image", "image.html"),
+    ("/ocr", "ocr.html"),
     ("/about", "about.html"),
     ("/donate", "donate.html"),
 ];

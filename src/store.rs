@@ -183,6 +183,90 @@ impl VideoJobStore {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct OcrJob {
+    pub id: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub result: Option<serde_json::Value>,
+    pub created_at: Instant,
+}
+
+pub struct OcrJobStore {
+    jobs: Mutex<HashMap<String, OcrJob>>,
+    ttl: Duration,
+    sem: tokio::sync::Semaphore,
+}
+
+const MAX_OCR_CONCURRENCY: usize = 2;
+
+impl OcrJobStore {
+    pub fn new(ttl_minutes: u64) -> Arc<Self> {
+        let store = Arc::new(Self {
+            jobs: Mutex::new(HashMap::new()),
+            ttl: Duration::from_secs(ttl_minutes * 60),
+            sem: tokio::sync::Semaphore::new(MAX_OCR_CONCURRENCY),
+        });
+        let s = Arc::clone(&store);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(10 * 60));
+            loop {
+                ticker.tick().await;
+                s.gc();
+            }
+        });
+        store
+    }
+
+    pub fn create(&self) -> OcrJob {
+        let id = uuid::Uuid::new_v4().to_string();
+        let job = OcrJob {
+            id: id.clone(),
+            status: "running".into(),
+            error: None,
+            result: None,
+            created_at: Instant::now(),
+        };
+        self.jobs.lock().unwrap().insert(id.clone(), job.clone());
+        job
+    }
+
+    pub fn get(&self, id: &str) -> Option<OcrJob> {
+        self.jobs.lock().unwrap().get(id).cloned()
+    }
+
+    pub fn delete(&self, id: &str) {
+        self.jobs.lock().unwrap().remove(id);
+    }
+
+    pub fn acquire_one_slot(&self) -> bool {
+        self.sem.try_acquire().is_ok()
+    }
+
+    pub fn release_one_slot(&self) {
+        self.sem.add_permits(1);
+    }
+
+    pub fn set_complete(&self, id: &str, result: serde_json::Value) {
+        if let Some(j) = self.jobs.lock().unwrap().get_mut(id) {
+            j.status = "completed".into();
+            j.result = Some(result);
+        }
+    }
+
+    pub fn set_error(&self, id: &str, msg: &str) {
+        if let Some(j) = self.jobs.lock().unwrap().get_mut(id) {
+            j.status = "failed".into();
+            j.error = Some(msg.to_string());
+        }
+    }
+
+    fn gc(&self) {
+        let cutoff = Instant::now() - self.ttl;
+        self.jobs.lock().unwrap().retain(|_, j| j.created_at >= cutoff);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

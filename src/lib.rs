@@ -12,9 +12,9 @@ use axum::middleware as axum_mw;
 use axum::Router;
 
 use config::Config;
-use handler::{download, imagegen, pages, translate, videogen};
+use handler::{download, imagegen, ocr, pages, translate, videogen};
 use middleware::{security_headers, RateDecision, RateLimiter, MAX_API_BODY};
-use store::{FileStore, VideoJobStore};
+use store::{FileStore, OcrJobStore, VideoJobStore};
 
 pub async fn main_inner() {
     tracing_subscriber::fmt()
@@ -35,6 +35,7 @@ pub async fn main_inner() {
 
     let file_store = FileStore::new(cfg.out_dir.clone(), cfg.ttl_hours as u64);
     let video_jobs = VideoJobStore::new(60);
+    let ocr_jobs = OcrJobStore::new(30);
 
     let client = if !cfg.agnes_api_key.is_empty() || !cfg.sensenova_key.is_empty() {
         Some(Arc::new(service::AIClient::new(
@@ -52,6 +53,7 @@ pub async fn main_inner() {
         config: Arc::new(cfg),
         file_store,
         video_jobs,
+        ocr_jobs,
         client,
     };
 
@@ -119,6 +121,14 @@ pub async fn main_inner() {
             axum::routing::get(videogen::handle_video_task_status),
         )
         .route(
+            "/api/ocr",
+            axum::routing::post(ocr::handle_ocr),
+        )
+        .route(
+            "/api/ocr/task/{id}",
+            axum::routing::get(ocr::handle_ocr_task),
+        )
+        .route(
             "/api/download/{*name}",
             axum::routing::get(download::handle_download),
         )
@@ -153,6 +163,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub file_store: Arc<FileStore>,
     pub video_jobs: Arc<VideoJobStore>,
+    pub ocr_jobs: Arc<OcrJobStore>,
     pub client: Option<Arc<service::AIClient>>,
 }
 

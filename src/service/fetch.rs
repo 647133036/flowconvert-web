@@ -126,6 +126,119 @@ pub async fn fetch_image(
     Ok(tmp_path.to_string_lossy().to_string())
 }
 
+/// Download an image or PDF from a public URL into tmp_dir and return its path.
+/// Mirrors Go service.FetchFile for the OCR endpoint.
+pub async fn fetch_doc(
+    tmp_dir: &str,
+    raw_url: &str,
+    max_bytes: u64,
+    allowed_exts: &[&str],
+) -> Result<(String, String), String> {
+    if raw_url.is_empty() {
+        return Err("无效或不允许访问的 URL".to_string());
+    }
+    let parsed = raw_url.parse::<reqwest::Url>()
+        .map_err(|_| "无效或不允许访问的 URL".to_string())?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("无效或不允许访问的 URL".to_string());
+    }
+    validate_download_url(raw_url)?;
+
+    // DNS pre-resolution blocks rebinding between lookup and connect.
+    let host = parsed.host_str().ok_or("URL 缺少 host")?.to_string();
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let pre_resolved: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|_| "DNS 解析失败".to_string())?
+        .collect();
+
+    if pre_resolved.is_empty() {
+        return Err("DNS 解析无结果".to_string());
+    }
+    if !pre_resolved.iter().any(|sa| is_safe_public_ip(sa.ip())) {
+        return Err("禁止访问内网/回环地址资源".to_string());
+    }
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| format!("下载失败: {}", e))?;
+
+    let resp = client
+        .get(raw_url)
+        .send()
+        .await
+        .map_err(|e| format!("下载失败: {}", e))?;
+    if resp.status() != 200 {
+        return Err(format!("下载失败: HTTP {}", resp.status()));
+    }
+    if let Some(remote) = resp.remote_addr() {
+        if !pre_resolved.iter().any(|sa| sa.ip() == remote.ip()) {
+            return Err("DNS 重绑定防护：连接 IP 与预解析地址不符，请求已拒绝".to_string());
+        }
+    }
+
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let ct = content_type.split(';').next().unwrap_or("").trim().to_lowercase();
+    let is_doc_ct = ct.starts_with("image/")
+        || ct == "application/pdf"
+        || ct == "application/x-pdf"
+        || ct == "application/octet-stream";
+    if !is_doc_ct {
+        return Err("链接内容不是图片或 PDF".to_string());
+    }
+
+    let ext_from_url = parsed
+        .path_segments()
+        .and_then(|mut s| s.next_back())
+        .and_then(|name| std::path::Path::new(name).extension())
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let ext = if allowed_exts.contains(&ext_from_url.as_str()) {
+        ext_from_url
+    } else if ct == "application/pdf" || ct == "application/x-pdf" {
+        "pdf".to_string()
+    } else if ct.starts_with("image/jpeg") {
+        "jpg".to_string()
+    } else if ct.starts_with("image/png") {
+        "png".to_string()
+    } else if ct.starts_with("image/gif") {
+        "gif".to_string()
+    } else if ct.starts_with("image/webp") {
+        "webp".to_string()
+    } else if ct.starts_with("image/bmp") {
+        "bmp".to_string()
+    } else if ct.starts_with("image/tiff") {
+        "tiff".to_string()
+    } else {
+        return Err("链接内容不是图片或 PDF".to_string());
+    };
+
+    let limit = if max_bytes > 0 { max_bytes } else { 50 * 1024 * 1024 };
+    let mut reader = resp.bytes_stream();
+    let mut data = Vec::new();
+    let mut total = 0u64;
+    while let Some(chunk) = reader.next().await {
+        let chunk = chunk.map_err(|e| format!("下载失败: {}", e))?;
+        if total + chunk.len() as u64 > limit {
+            return Err("链接文件超过大小限制".to_string());
+        }
+        data.extend_from_slice(&chunk);
+        total += chunk.len() as u64;
+    }
+
+    let tmp_name = format!("url_{}.{}", new_id(10), ext);
+    let tmp_path = Path::new(tmp_dir).join(tmp_name);
+    std::fs::write(&tmp_path, &data).map_err(|e| format!("保存失败: {}", e))?;
+    Ok((tmp_path.to_string_lossy().to_string(), ext))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
