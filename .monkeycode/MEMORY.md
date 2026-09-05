@@ -135,9 +135,10 @@ Entries discovered by the Agent during task execution should follow this format:
 
 ## 排查与调试
 
-- tests/integration.rs 里的 `create_test_png` 早期版本手写 IDAT 的 zlib 字节（`0x08 0x90 0x03 0x00 0x00`）并非合法 deflate 流，文件能存盘但 PIL 报 `cannot identify image file`，表现为 OCR 任务 1-2 秒内失败（python 启动即报错），容易被误判为 handler 或脚本 bug
+- 手写测试 PNG 的正确做法：IDAT 用 zlib stored block（`78 01 01` + LEN/NLEN 小端 + 原始扫描线），CRC 必须对「块类型名 + 数据」计算，见 `append_png_chunk`；早期版本 IDAT 字节 `0x08 0x90 0x03 0x00 0x00` 不是合法 deflate 流，文件能存盘但 PIL 报 `cannot identify image file`
 - 排查这类「秒失败」时先看服务端 `eprintln!`/日志里的 `run_err` 全文，OCR 任务接口的 error 字段是脱敏文案「识别失败，请稍后重试」，不含真实原因
-- 手写 PNG 的正确做法：IDAT 用 zlib stored block（`78 01 01` + LEN/NLEN 小端 + 原始扫描线），CRC 必须对「块类型名 + 数据」计算，见 `append_png_chunk`
+- OCR 中文行准确率（scripts/ocr.py `refine_words`）：多语言组合 chi_sim+chi_tra+eng 会把简体读成繁体并混入拉丁乱码，对形态判为中文的行改用 chi_sim 单语言重识别才准。形态判据是连通域 median 宽高比 ≥0.82（中文 0.83-1.00 / 英文 0.59-0.80）；墨迹密度（中文 0.18-0.30 / 英文 0.12-0.19）与英文行重叠不可用；unsharp / contrast / upscale 预处理对结果无改善
+- 章节罗马序号还原的边界：tesseract 把竖线序列 III 并成一个字符，必须按连通域计数窄竖条；裁剪右边界取 `x_stop - 2`，多切进中文字形 1 像素就把 IV 读成 II 或空；前缀必须「笔画互不横向重叠 + 宽笔画填充率 ≤0.32」，否则「听」字切出的笔画会被误判成 V
 
 ## 项目依赖
 
