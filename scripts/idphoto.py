@@ -115,12 +115,42 @@ class FaceDetector:
 
 
 _detector = None
+_detector_broken = False
+
+_haar = None
+
+
+def _detect_face_haar(img_bgr):
+    """OpenCV 级联人脸检测。mtcnnruntime 缺失时降级用。
+
+    cv2.data.haarcascades 自带 xml，不引入任何新依赖；精度低于 MTCNN，
+    但对正面照足够定位头部。
+    """
+    global _haar
+    if _haar is None:
+        path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+        if not os.path.exists(path):
+            return None
+        _haar = cv2.CascadeClassifier(path)
+    h, w = img_bgr.shape[:2]
+    faces = _haar.detectMultiScale(img_bgr, scaleFactor=1.1, minNeighbors=5, minSize=(w // 16, h // 16))
+    if len(faces) == 0:
+        return None
+    x, y, fw, fh = faces[0]
+    return (int(x), int(y), int(fw), int(fh))
 
 
 def detect_face(img_bgr):
-    global _detector
+    global _detector, _detector_broken
+    if _detector_broken:
+        return _detect_face_haar(img_bgr)
     if _detector is None:
-        _detector = FaceDetector()
+        try:
+            _detector = FaceDetector()
+        except ImportError:
+            _detector_broken = True
+            print("[IDPhoto] mtcnnruntime 不可用，降级为 OpenCV 级联检测", file=sys.stderr)
+            return _detect_face_haar(img_bgr)
     return _detector.detect(img_bgr)
 
 
