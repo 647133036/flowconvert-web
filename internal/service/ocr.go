@@ -16,6 +16,7 @@ type OcrOptions struct {
 	Redbox    bool     `json:"redbox"`
 	Optimize  bool     `json:"optimize"`
 	Translate bool     `json:"translate"`
+	Exam      bool     `json:"exam"`
 	Formats   []string `json:"formats"`
 	Engine    string   `json:"engine"`
 }

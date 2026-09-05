@@ -382,6 +382,59 @@ def _ctc_decode(logits: "np.ndarray", table: List[str]) -> List[Tuple[str, float
     return out
 
 
+def _ctc_decode_topk(logits: "np.ndarray", table: List[str], topk: int = 6):
+    """CTC 逐字符解码，返回 [(char, conf, candidates)]。
+
+    rec 模型输出已是 softmax 概率（各帧和为 1），conf 直接取帧内该字符的概率，
+    不能再套 softmax。对每个合并后的非 blank 段，取段内该字符概率最大的帧，
+    用该帧的 top-K 作为候选——top-K 天然落在形近字混淆集上，供上层通用纠错。
+    """
+    import numpy as np
+
+    idxs = np.argmax(logits, axis=1)
+    chars = []
+    n = len(idxs)
+    i = 0
+    while i < n:
+        v = int(idxs[i])
+        if v == 0:
+            i += 1
+            continue
+        j = i
+        while j < n and idxs[j] == v:
+            j += 1
+        seg = logits[i:j]
+        frame = seg[int(np.argmax(seg[:, v]))]
+        conf = float(frame[v])
+        cands = []
+        for ci in np.argsort(frame)[::-1][:topk]:
+            ci = int(ci)
+            if 0 < ci < len(table):
+                cands.append((table[ci], float(frame[ci])))
+        ch = table[v] if 0 < v < len(table) else ""
+        chars.append((ch, conf, cands))
+        i = j
+    return chars
+
+
+def ppocr_rec_line_chars(crop, topk: int = 6):
+    """识别单行文本条带，返回逐字符 (char, conf, candidates)。
+
+    crop 为 BGR 或灰度 numpy 数组；供 CJK 行路由做通用纠错。
+    """
+    import numpy as np  # noqa: F401
+
+    bgr = _to_bgr(crop)
+    if bgr.size == 0 or bgr.shape[1] < 2 or bgr.shape[0] < 2:
+        return []
+    _, rec, table = _ppocr_sessions()
+    max_wh_ratio = max(REC_IMG_SHAPE[2] / float(REC_IMG_SHAPE[1]),
+                       bgr.shape[1] * 1.0 / bgr.shape[0])
+    blob = _rec_transform([bgr], max_wh_ratio)
+    logits = rec.run(None, {"x": blob})[0][0]
+    return _ctc_decode_topk(logits, table, topk)
+
+
 def ppocr_recognize(image, text_score: float = REC_SCORE) -> List[dict]:
     """PP-OCRv4 det+rec 全流程，返回 [{'text','score','box': [x,y,w,h]}]。"""
     import cv2  # noqa: F401

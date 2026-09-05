@@ -354,10 +354,13 @@ func TestParseOcrOptionsFormatsAndFlags(t *testing.T) {
 	req := ocrUpload(t, "a.png", blankPNG(t, 20, 20),
 		"formats", "DOCX, json ,redbox",
 		"formats", "txt",
-		"redbox", "on", "optimize", "1", "translate", "false")
+		"redbox", "on", "optimize", "1", "translate", "false", "exam", "yes")
 	opts := parseOcrOptions(req)
 	if !opts.Redbox || !opts.Optimize || opts.Translate {
 		t.Errorf("flags = %v/%v/%v, want true/true/false", opts.Redbox, opts.Optimize, opts.Translate)
+	}
+	if !opts.Exam {
+		t.Error("exam = false, want true")
 	}
 	got := strings.Join(opts.Formats, ",")
 	want := "docx,json,redbox,txt"

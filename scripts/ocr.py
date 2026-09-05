@@ -219,6 +219,31 @@ def _is_cjk(ch):
     return "\u4e00" <= ch <= "\u9fff"
 
 
+_CJK_RUN = re.compile("[\u3000-\u303f\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]")
+_PUNCT_ONLY = re.compile(
+    "[\\s.,;:!?()\\[\\]<>/\\\\'\"`~@#$%^&*+=|、。，；：！？（）【】《》〈〉“”‘’·…—–\\-]+"
+)
+
+# 一行都是「A. … B. …」这样的选项排，属于题干段落的续行而非标题
+OPTION_LINE = re.compile(r"^[A-Za-z][.)\]]\s*\S.*?\s+[A-Za-z][.)\]]\s*\S")
+
+# 章节标题：罗马序号打头，如「III. 长对话理解」
+SECTION_TITLE = re.compile(r"^\s*[IVXLC]{1,5}\s*[.、，,]\s*\S")
+
+
+def _needs_space(prev, cur):
+    """相邻两个词框之间是否要插入空格。
+
+    OCR 给相邻中文方块字返回的字面框会互相留出间隙，照抄间距会把
+    「长对话理解」拼成「长 对话 再 解」；纯标点、全角括号与数字同理。
+    """
+    if _CJK_RUN.search(prev.text) or _CJK_RUN.search(cur.text):
+        return False
+    if _PUNCT_ONLY.fullmatch(prev.text) or _PUNCT_ONLY.fullmatch(cur.text):
+        return False
+    return True
+
+
 def _join_words(items):
     """Join word tokens, inserting a space only when the horizontal gap is real.
 
@@ -230,10 +255,106 @@ def _join_words(items):
         if i:
             prev = items[i - 1]
             gap = it.x - (prev.x + prev.w)
-            if gap > 0.3 * max(it.h, prev.h, 1):
+            if gap > 0.3 * max(it.h, prev.h, 1) and _needs_space(prev, it):
                 parts.append(" ")
         parts.append(it.text)
     return "".join(parts).strip()
+
+
+def _strip_edge_punct(text):
+    """去掉单元格首尾残留的标点；表格线被读成「-」/「|」时最常见。"""
+    out = text.strip()
+    while out and not (_CJK_RUN.search(out[0]) or out[0].isalnum()):
+        out = out[1:].lstrip()
+    while out and not (_CJK_RUN.search(out[-1]) or out[-1].isalnum()):
+        out = out[:-1].rstrip()
+    return out.strip()
+
+
+# 试卷固定搭配。只有「其余字符完全一致、仅一个字不同」时才替换，
+# 因此对非试卷文档不会命中。按长度降序，长的先修避免短搭配抢位。
+# 仅在 exam 模式下启用（默认关）：通用文档改走 CJK 路由 + jieba 通用纠错。
+EXAM_IDIOMS = tuple(sorted((
+    "每小题所给", "每小题1分", "长对话理解", "单项选择", "最佳选项",
+    "三个选项", "四个选项", "读两遍", "信息转换", "短文理解",
+    "中选出", "，满分",
+    "你将听到一篇短文", "请根据短文内容",
+), key=len, reverse=True))
+
+# 领域开关：exam=True 启用试卷固定搭配兜底；默认 False 保持通用。
+_EXAM_MODE = False
+
+
+def set_exam_mode(enabled):
+    global _EXAM_MODE
+    _EXAM_MODE = bool(enabled)
+
+
+def _repairable(a, b):
+    """两个字能否互为 OCR 误读。
+
+    数字必须原样匹配，否则「共5小题」会被当成「每小题」改坏。
+    """
+    if a == b:
+        return True
+    if a.isdigit() or b.isdigit():
+        return False
+    return _is_cjk(a) and _is_cjk(b)
+
+
+def _phrase_diff(seg, phrase):
+    """返回 (可修复差位数, 是否存在不可修复的差位)。"""
+    fix, hard = 0, False
+    for a, b in zip(seg, phrase):
+        if a == b:
+            continue
+        if _repairable(a, b):
+            fix += 1
+        else:
+            hard = True
+    return fix, hard
+
+
+def repair_exam_phrases(text):
+    """把试卷固定搭配里被 OCR 换掉的单字修回。
+
+    低分辨率下 tesseract 会把「理解」读成「再解」、「选择」读成「舍择」，
+    整行或整字重识别都救不回来（实测置信度 0-22），只能靠固定搭配兜底。
+    """
+    if not text or not _CJK_RUN.search(text):
+        return text
+    out = text
+    # 已正确读出的搭配要先保护：部分搭配彼此只差一个字（三个选项/四个选项），
+    # 不记账会把正确的片段改错
+    blocked = []
+    for phrase in EXAM_IDIOMS:
+        n = len(phrase)
+        i = 0
+        while i + n <= len(out):
+            if out[i:i + n] == phrase:
+                blocked.append((i, i + n))
+                i += n
+            else:
+                i += 1
+    for phrase in EXAM_IDIOMS:
+        n = len(phrase)
+        for i in range(len(out) - n + 1):
+            if any(not (i + n <= s or i >= e) for s, e in blocked):
+                continue
+            fix, hard = _phrase_diff(out[i:i + n], phrase)
+            if hard:
+                continue
+            if fix == 0:
+                continue
+            # 单字误读最常见，直接修。多字误读（低分辨率整串糊掉，如「请根据」
+            # →「谢根回」）只在短语足够长且相同字符占比过半时修，避免把碰巧
+            # 相似的文本改坏。
+            matched = n - fix
+            if fix == 1 or (n >= 6 and fix <= 3 and matched * 2 >= n):
+                out = out[:i] + phrase + out[i + n:]
+                blocked.append((i, i + n))
+            continue
+    return out
 
 
 # ── 繁简转换 ─────────────────────────────────────────────
@@ -373,19 +494,25 @@ class TesseractEngine:
             )
         return words
 
+    def page_gray(self, image):
+        """返回与 image_words 同一份预处理后的灰度图，保证两者坐标对齐。"""
+        import cv2
+        import numpy as np
+
+        return self._prepare(
+            cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2GRAY), self.max_width
+        )
+
     def image_words(self, image):
         """Return list[Word] (box + confidence) for one PIL image.
 
         逐个 PSM 尝试并按平均置信度择优；首个 PSM 已足够好时提前收敛，
         避免在大尺寸图上重复跑 PSM（PSM 11 单次可达数十秒）。
+        返回的词框统一在输入 image 的像素坐标系（见 _to_image_coords）。
         """
-        import cv2
-        import numpy as np
         from PIL import Image
 
-        gray = self._prepare(
-            cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2GRAY), self.max_width
-        )
+        gray = self.page_gray(image)
         img = Image.fromarray(gray)
 
         best, best_score = [], -1.0
@@ -397,8 +524,30 @@ class TesseractEngine:
             if score > best_score or (score == best_score and len(words) > len(best)):
                 best, best_score = words, score
             if score >= 0.6 and len(words) >= 20:
-                return self.refine_words(gray, best)
-        return self.refine_words(gray, best)
+                break
+        return self._to_image_coords(self.refine_words(gray, best), image, gray)
+
+    @staticmethod
+    def _to_image_coords(words, image, gray):
+        """把词框从灰度图坐标还原回输入 image 的像素坐标。
+
+        page_gray 会把小图按 max_width 放大（normal 1400 / high 2400），
+        识别得到的词框因此是放大后灰度图的坐标；analyze_page 里约定行坐标
+        是 page_w（=image.width）单位、靠 sx/sy 换算到灰度图，若不还原，
+        放大场景下裁剪会双重缩放跑偏（小图 OCR 时尤其明显）。
+        """
+        fx = image.width / max(float(gray.shape[1]), 1.0)
+        fy = image.height / max(float(gray.shape[0]), 1.0)
+        if abs(fx - 1.0) < 1e-3 and abs(fy - 1.0) < 1e-3:
+            return words
+        for w in words:
+            w.x = int(w.x * fx)
+            w.y = int(w.y * fy)
+            w.w = max(int(w.w * fx), 1)
+            w.h = max(int(w.h * fy), 1)
+            w.size = float(w.h)
+        return words
+
 
     def _crop_words(self, gray, x0, y0, x1, y1, psm, lang, fx=1.0, extra=""):
         """在 gray 上裁一块按指定语言重识别，返回坐标已还原到全图的 words。"""
@@ -1036,20 +1185,39 @@ def cluster_lines(words):
     for g in groups:
         items = sorted(g, key=lambda i: i.x)
         heights = sorted(i.h for i in items)
-        lines.append(
-            Line(
-                text=_join_words(items),
-                x=min(i.x for i in items),
-                y=min(i.y for i in items),
-                w=max(i.x + i.w for i in items) - min(i.x for i in items),
-                h=max(i.h for i in items),
-                conf=sum(i.conf for i in items) / len(items),
-                size=float(heights[len(heights) // 2]),
-                page=items[0].page,
-                words=items,
-            )
+        ln = Line(
+            text=repair_exam_phrases(_join_words(items)) if _EXAM_MODE else _join_words(items),
+            x=min(i.x for i in items),
+            y=min(i.y for i in items),
+            w=max(i.x + i.w for i in items) - min(i.x for i in items),
+            h=max(i.h for i in items),
+            conf=sum(i.conf for i in items) / len(items),
+            size=float(heights[len(heights) // 2]),
+            page=items[0].page,
+            words=items,
         )
+        # 1×1 的退化词框是重识别的残留，既读不出内容也过不了任何重叠判定
+        if ln.text and ln.w >= 2 and ln.h >= 2:
+            lines.append(ln)
     return lines
+
+
+def _absorb_punct_lines(lines):
+    """把只含标点的孤立行并回上一行。
+
+    行尾的「，」这类标点常被 OCR 给出行内偏移的词框，聚类时落到下一行，
+    读起来像正文中间断了一句。
+    """
+    out = []
+    for ln in lines:
+        s = ln.text.strip()
+        if out and s and _PUNCT_ONLY.fullmatch(s) and ln.y <= out[-1].y + out[-1].h:
+            prev = out[-1]
+            if not prev.text.rstrip().endswith(("。", "！", "？", ".", "!", "?")):
+                prev.text = (prev.text.rstrip() + s).strip()
+            continue
+        out.append(ln)
+    return out
 
 
 def detect_columns(lines, page_w):
@@ -1086,9 +1254,21 @@ def is_header_footer(ln, page_w, page_h):
 
 
 def is_title(ln, med_size):
+    """判断一行是否是标题。
+
+    字号只能粗筛：同一版面里，说明句和选项行的字号常常与真标题接近。
+    再靠行尾字符区分——章节标题以「）」收尾的括注，说明句以「。」/「，」/「.」收尾。
+    """
     if not ln.size or not med_size:
         return False
-    return ln.size >= med_size * 1.35 and len(ln.text) <= 240
+    text = ln.text.strip()
+    if not text or len(text) > 240:
+        return False
+    if ln.size < med_size * 1.3:
+        return False
+    if OPTION_LINE.match(text):
+        return False
+    return SECTION_TITLE.match(text) is not None or text[-1] in ")）"
 
 
 def is_formula(ln):
@@ -1359,6 +1539,178 @@ def _bbox_overlap(a, b):
     return inter / area
 
 
+def _rule_segments(mask, orient, min_len):
+    """取形态学结果里的长条线段，返回 [(中心坐标, 沿轴起点, 沿轴终点)]。
+
+    不能按整页投影判定：表格往往只占版面的一部分宽度，投影覆盖率天生到
+    不了整页的一半，长投影法会把所有表格线判掉。
+    """
+    import cv2
+
+    n, _lab, stats, _cent = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    segs = []
+    for i in range(1, n):
+        x, y, w, h, _a = stats[i]
+        if orient == "h":
+            if h > 6 or w < min_len:
+                continue
+            segs.append((y + h / 2.0, x, x + w))
+        else:
+            if w > 6 or h < min_len:
+                continue
+            segs.append((x + w / 2.0, y, y + h))
+    return sorted(segs, key=lambda s: s[0])
+
+
+def _merge_segments(segs, tol):
+    """按中心坐标合并同一根线的多个片段，返回 [(中心, 沿轴起点, 沿轴终点)]。"""
+    out = []
+    for c, a, b in segs:
+        if out and abs(c - out[-1][0]) <= tol:
+            _c, _a, _b = out[-1]
+            out[-1] = (out[-1][0], min(_a, a), max(_b, b))
+        else:
+            out.append((c, a, b))
+    return out
+
+
+def detect_line_tables(bw, sx, sy):
+    """用形态学提取的横竖线还原表格框与行列网格，返回页面坐标结果。
+
+    带边框的表格比词框聚类可靠得多：OCR 常整列漏词，而表格线不依赖文字。
+    单页开销在毫秒级，可替代几十秒的神经版面检测。
+
+    sx / sy 是「每页面单位对应的像素数」，故像素坐标要除回去才是页面坐标。
+    """
+    import cv2
+
+    h, w = bw.shape[:2]
+    hlen = max(100, int(w * 0.06))
+    vlen = max(60, int(h * 0.02))
+    hm = cv2.morphologyEx(bw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (hlen, 1)))
+    vm = cv2.morphologyEx(bw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, vlen)))
+    rows = _merge_segments(_rule_segments(hm, "h", hlen), 6)
+    cols = _merge_segments(_rule_segments(vm, "v", vlen), 6)
+    if len(rows) < 3 or len(cols) < 2:
+        return []
+
+    bands = []
+    cur = [rows[0]]
+    for r in rows[1:]:
+        x_lo, x_hi = cur[0][1], cur[0][2]
+        tol = max(6.0, (x_hi - x_lo) * 0.03)
+        step = r[0] - cur[-1][0]
+        if step <= 0 or step > h * 0.15 or abs(r[1] - x_lo) > tol or abs(r[2] - x_hi) > tol:
+            bands.append(cur)
+            cur = [r]
+        else:
+            cur.append(r)
+    bands.append(cur)
+
+    out = []
+    for band in bands:
+        if len(band) < 3:
+            continue
+        x_lo, x_hi = band[0][1], band[0][2]
+        y_lo, y_hi = band[0][0], band[-1][0]
+        span = max(y_hi - y_lo, 1.0)
+        tol = max(6.0, (x_hi - x_lo) * 0.03)
+        vset = set(
+            c[0] for c in cols
+            if x_lo - tol - 6 <= c[0] <= x_hi + tol + 6
+            and c[2] >= y_lo - tol and c[1] <= y_hi + tol
+            and (min(c[2], y_hi) - max(c[1], y_lo)) >= span * 0.3
+        ) | {x_lo, x_hi}
+        # 横线端点比竖线中心偏 1-2 像素，合并起来才是同一根线
+        vsel, vmerge = [], []
+        for v in sorted(vset):
+            if vmerge and v - sum(vmerge) / len(vmerge) <= max(5.0, tol * 0.2):
+                vmerge.append(v)
+            else:
+                if vmerge:
+                    vsel.append(sum(vmerge) / len(vmerge))
+                vmerge = [v]
+        if vmerge:
+            vsel.append(sum(vmerge) / len(vmerge))
+        if len(vsel) < 2:
+            continue
+        out.append({
+            "bbox": (x_lo / sx, y_lo / sy, x_hi / sx, y_hi / sy),
+            "vlines": [c / sx for c in vsel],
+            "hlines": [r[0] / sy for r in band],
+        })
+    return out
+
+
+def _ocr_cell(gray, engine, x0, y0, x1, y1, sx, sy, inset=6):
+    """裁一个单元格单独重识别；内缩避开表格线，按子行聚类后拼接。
+
+    x0/y0 是页面坐标，sx/sy 是「每页面单位对应的像素数」，相乘得像素坐标。
+    内缩 6 像素在实测里最干净：4 像素会把表格线带进去读出「-」，9 像素会
+    咬掉首尾字母。
+    """
+    xa, ya = int(x0 * sx) + inset, int(y0 * sy) + inset
+    xb, yb = int(x1 * sx) - inset, int(y1 * sy) - inset
+    if xb - xa < 8 or yb - ya < 8:
+        return ""
+    ws = engine._crop_words(gray, xa, ya, xb, yb, 8, engine.lang, fx=3.0)
+    med = _median(w.h for w in ws) or 8
+    rows = []
+    for w in sorted(ws, key=lambda i: (i.y, i.x)):
+        for r in rows:
+            cy = sum(i.cy for i in r) / len(r)
+            if abs(w.cy - cy) <= max(med * 0.6, 3):
+                r.append(w)
+                break
+        else:
+            rows.append([w])
+    text = " ".join(_join_words(sorted(r, key=lambda i: i.x)) for r in rows)
+    text = re.sub(r"\s+", " ", text.replace("|", " ")).strip()
+    return _strip_edge_punct(text)
+
+
+def build_line_table(grid, words, engine=None, gray=None, sx=1.0, sy=1.0, fill_cells=True):
+    """把词按行列线分格；空格在 fill_cells 时用逐格重识别补全文字。
+
+    主遍 OCR 读到的词优先使用，质量高于重识别结果；只有主遍漏掉的单元格
+    才补识别，成本随空格数量线性增长。
+    """
+    vl, hl = grid["vlines"], grid["hlines"]
+    cells = []
+    for ri in range(len(hl) - 1):
+        y0, y1 = hl[ri], hl[ri + 1]
+        # 行内留白必须很小：表格外紧贴着题目说明行，留白一放大就会把
+        # 说明行的词吸进第一行。
+        py = min(max(y1 - y0, 1.0) * 0.25, 2.0)
+        row = []
+        for ci in range(len(vl) - 1):
+            x0, x1 = vl[ci], vl[ci + 1]
+            px = min(max(x1 - x0, 1.0) * 0.15, 4.0)
+            ins = sorted(
+                (w for w in words
+                 if x0 - px <= w.cx <= x1 + px and y0 - py <= w.cy <= y1 + py),
+                key=lambda w: w.x)
+            text = _join_words(ins)
+            if not text and fill_cells and engine is not None and gray is not None:
+                text = _ocr_cell(gray, engine, x0, y0, x1, y1, sx, sy)
+            row.append(text)
+        cells.append(row)
+    return cells
+
+
+def _page_arrays(image, page_w, page_h, engine=None):
+    """返回 (gray, bw, sx, sy)；有 engine 时与 image_words 的预处理保持一致。"""
+    import cv2
+    import numpy as np
+
+    if engine is not None:
+        gray = engine.page_gray(image)
+    else:
+        gray = cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2GRAY)
+    bw = TesseractEngine._ink(gray)
+    return gray, bw, max(gray.shape[1], 1) / max(page_w, 1.0), max(gray.shape[0], 1) / max(page_h, 1.0)
+
+
 def apply_neural_tables(image, lines, page, pw, ph):
     """PP-DocLayout 定位表格区, SLANeXt 识别结构, 返回 (table_blocks, consumed_line_ids)。
 
@@ -1425,26 +1777,198 @@ def apply_neural_tables(image, lines, page, pw, ph):
     return tables, consumed
 
 
-def analyze_page(words, page_w, page_h, optimize, header_cache, image=None, neural_tables=False):
+# ── CJK 行路由 + 通用纠错 ─────────────────────────────────
+#
+# tesseract 对中文的识别远弱于 PP-OCR（会把「理解」读成「再解」）。
+# 通用做法：中文为主的行改走 PP-OCR 重识别，再用 jieba 通用词频对低置信字
+# 做形近候选纠错。整条链路与文档领域无关，不依赖任何试卷固定搭配。
+
+_JIEBA_FREQ = {"freq": None}
+_ROUTE_CJK_OK = {"ok": None}
+
+
+def _jieba_freq():
+    """惰性加载 jieba 通用词典词频（首次 initialize 后 FREQ 才有效）。"""
+    if _JIEBA_FREQ["freq"] is None:
+        import jieba
+
+        jieba.initialize()
+        _JIEBA_FREQ["freq"] = jieba.dt.FREQ
+    return _JIEBA_FREQ["freq"]
+
+
+def _cjk_fluency(text):
+    """通顺度评分：奖励被 jieba 连成一体的长词（按长度平方），词频仅在等长时
+    作平局裁决，词典外孤字重罚。
+
+    为什么用词长而非纯词频：「每小题」这类正确搭配在 jieba 里词频为 0，
+    纯词频会把它误判为 OOV，反而奖励「小器」「小腿」这种真实但错误的词，
+    造成把正确字改错。jieba 把一个片段切成单个 token 说明它本身连贯，
+    按长度平方奖励即可让「每小题」(9) 胜过「每+小器」(0.3+5.4)；
+    等长时（满分 vs 调分）再由词频分出胜负。
+    """
+    import math
+
+    import jieba
+
+    freq = _jieba_freq()
+    score = 0.0
+    for w in jieba.lcut(text):
+        if not _CJK_RUN.search(w):
+            continue  # 拉丁/数字/标点纠错前后不变，保持中性相互抵消
+        n = len(w)
+        if n >= 2:
+            score += n * n + math.log(freq.get(w, 0) + 1) * 0.5
+        else:
+            score += 0.3 if freq.get(w, 0) > 0 else -6.0
+    return score
+
+
+def _correct_cjk_chars(chars, conf_gate=0.85, gain_min=4.0):
+    """对逐字符 (char, conf, candidates) 做安全通用纠错，返回纠正后字符串。
+
+    只动低置信（conf<conf_gate）的 CJK 字，候选取自模型 top-K（天然形近混淆集）。
+    每个候选相对原文独立评估整行通顺度增益，超过 gain_min 才采纳，
+    最后一次性应用（不级联）。gain_min=4.0 是精度优先的经验阈值：
+    实测强正确修复（逸→选 6.6、飓→题 4.7）都在 4.3 以上，而误改
+    （题→盟 3.4、话→活 1.1）都在 3.4 以下，宁可漏改也不可误改正确字。
+    """
+    text = "".join(c for c, _conf, _c in chars)
+    if not text or not _CJK_RUN.search(text):
+        return text
+    base = _cjk_fluency(text)
+    fixes = []
+    for i, (ch, conf, cands) in enumerate(chars):
+        if conf >= conf_gate or not _is_cjk(ch):
+            continue
+        best = None
+        for cand, _p in cands:
+            if cand == ch or len(cand) != 1 or not _is_cjk(cand):
+                continue
+            trial = text[:i] + cand + text[i + 1:]
+            gain = _cjk_fluency(trial) - base
+            if gain > gain_min and (best is None or gain > best[1]):
+                best = (cand, gain)
+        if best:
+            fixes.append((i, best[0]))
+    if not fixes:
+        return text
+    out = list(text)
+    for i, cand in fixes:
+        out[i] = cand
+    return "".join(out)
+
+
+def _route_cjk_lines(lines, gray, sx, sy):
+    """中文为主的行改走 PP-OCR + 通用纠错，原位替换 line.text。
+
+    只改文字、不动版面框（bbox 仍来自主遍引擎），下游阅读序/标题/表格判定
+    不受影响。PP-OCR 或 jieba 不可用时整体跳过，保持原引擎输出。
+    """
+    if _ROUTE_CJK_OK["ok"] is False:
+        return
+    try:
+        _pp_scripts_path()
+        from pp_ocr_onnx import _ppocr_sessions, ppocr_rec_line_chars
+
+        _ppocr_sessions()
+        _jieba_freq()
+    except Exception as exc:
+        _ROUTE_CJK_OK["ok"] = False
+        _log(f"[OCR] CJK 路由不可用，保持原引擎输出: {exc}")
+        return
+    _ROUTE_CJK_OK["ok"] = True
+
+    for ln in lines:
+        text = ln.text
+        if not text:
+            continue
+        visible = [c for c in text if not c.isspace()]
+        n_cjk = sum(1 for c in visible if _is_cjk(c))
+        if n_cjk < 2 or n_cjk * 2 < len(visible):
+            continue  # 中文过半才路由，避免误改英文行
+        pad = 3
+        xa = max(int(ln.x * sx) - pad, 0)
+        ya = max(int(ln.y * sy) - pad, 0)
+        xb = min(int((ln.x + ln.w) * sx) + pad, gray.shape[1])
+        yb = min(int((ln.y + ln.h) * sy) + pad, gray.shape[0])
+        crop = gray[ya:yb, xa:xb]
+        if crop.size == 0 or crop.shape[1] < 4:
+            continue
+        try:
+            chars = ppocr_rec_line_chars(crop)
+        except Exception:
+            continue
+        if not chars:
+            continue
+        new_text = _correct_cjk_chars(chars)
+        if _EXAM_MODE:
+            # exam 模式：在通用纠错之上再叠加试卷固定搭配兜底，
+            # 修通用纠错漏掉的「调分→满分」这类弱信号错字。
+            new_text = repair_exam_phrases(new_text)
+        if new_text.strip():
+            ln.text = new_text
+
+
+def analyze_page(words, page_w, page_h, optimize, header_cache, image=None,
+                 neural_tables=False, engine=None, route_cjk=False):
     """Full layout analysis for one page: tables + typed blocks + reading order.
 
-    neural_tables=True 时才调用 PP-DocLayout + SLANeXt；模型体积大、单页推理
-    可达数分钟，因此默认关闭，仅高级模式开启。
+    带边框的表格优先用线条网格还原：表格线不依赖 OCR，能救回主遍整列漏词的
+    情况；有 engine 时对空格做逐格重识别补全，两种模式都做，单页几秒。
+    连线条都检测不到时才回退到 PP-DocLayout + SLANeXt，那个路径单页可达数分钟。
     """
     page_w = max(float(page_w or 1), 1.0)
     page_h = max(float(page_h or 1), 1.0)
-    lines = cluster_lines(words)
+    lines = _absorb_punct_lines(cluster_lines(words))
     ncols = detect_columns(lines, page_w)
     lines = order_lines(lines, page_w, ncols)
     tables, consumed = detect_tables(words, lines, page_h)
     page = words[0].page if words else 0
-    if neural_tables:
+    gray = bw = sx = sy = None
+    if image is not None:
+        gray, bw, sx, sy = _page_arrays(image, page_w, page_h, engine)
+        grids = detect_line_tables(bw, sx, sy)
+        if grids:
+            # 逐格补识别单页只需几秒，两种模式都做：主遍 OCR 常整列漏词
+            built = [
+                (g["bbox"], build_line_table(g, words, engine, gray, sx, sy,
+                                             fill_cells=engine is not None))
+                for g in grids
+            ]
+            if built:
+                tables = [t for t in tables
+                          if all(_bbox_overlap(t.bbox, b) < 0.5 for b, _c in built)]
+                for bbox, cells in built:
+                    tables.append(
+                        Block(
+                            type="table",
+                            text="\n".join(" | ".join(r) for r in cells),
+                            page=page,
+                            bbox=bbox,
+                            conf=1.0,
+                            cells=cells,
+                        )
+                    )
+                for bbox, _cells in built:
+                    # 按行中心判是否落在表内：词框高度能超出真实行框好几倍，
+                    # 用包围盒加外扩比例会把表格上方紧贴的说明行一起吞掉。
+                    for ln in lines:
+                        if ln.page != page:
+                            continue
+                        cx = ln.x + ln.w / 2
+                        cy = ln.y + ln.h / 2
+                        if bbox[0] <= cx <= bbox[2] and bbox[1] <= cy <= bbox[3]:
+                            consumed.add(id(ln))
+    if neural_tables and not tables:
         neural, ncons = apply_neural_tables(image, lines, page, page_w, page_h)
         if neural:
             tables = neural
             consumed |= ncons
-    blocks = group_blocks([ln for ln in lines if id(ln) not in consumed],
-                          page_w, page_h, optimize, header_cache)
+    body = [ln for ln in lines if id(ln) not in consumed]
+    if route_cjk and gray is not None:
+        _route_cjk_lines(body, gray, sx, sy)
+    blocks = group_blocks(body, page_w, page_h, optimize, header_cache)
     blocks.extend(tables)
     blocks.sort(key=lambda b: (b.bbox[1], b.bbox[0]))
     return blocks, lines, ncols
@@ -1657,6 +2181,10 @@ def run(src, opts, outdir):
         mode = "general"
     if quality not in QUALITY_PROFILE:
         quality = "normal"
+    # 通用文档：中文行路由 PP-OCR + jieba 纠错（默认开）；
+    # exam=true 额外启用试卷固定搭配兜底（默认关，避免过拟合到试卷）。
+    route_cjk = bool(opts.get("route_cjk", True))
+    set_exam_mode(bool(opts.get("exam")))
 
     ext = os.path.splitext(src)[1].lower()
     converter = CharsetConverter(charset)
@@ -1753,7 +2281,8 @@ def run(src, opts, outdir):
                     w.h = max(int(w.h * sy), 1)
                 blocks, lines, ncols = analyze_page(
                     words_p, pw, ph, optimize, header_cache, oimg,
-                    neural_tables=(mode == "advanced"))
+                    neural_tables=(mode == "advanced"), engine=engine,
+                    route_cjk=route_cjk)
                 layout_columns = max(layout_columns, ncols)
                 all_blocks.extend(blocks)
                 all_lines.extend(lines)
@@ -1780,7 +2309,8 @@ def run(src, opts, outdir):
             w.page = 0
         blocks, lines, ncols = analyze_page(
             words, pw, ph, optimize, header_cache, oimg,
-            neural_tables=(mode == "advanced"))
+            neural_tables=(mode == "advanced"), engine=engine,
+            route_cjk=route_cjk)
         layout_columns = ncols
         all_blocks.extend(blocks)
         all_lines.extend(lines)
@@ -1822,6 +2352,7 @@ def run(src, opts, outdir):
         "options": {
             "mode": mode, "quality": quality, "charset": charset, "lang": lang,
             "redbox": redbox, "optimize": optimize, "translate": do_translate,
+            "exam": _EXAM_MODE, "route_cjk": route_cjk,
             "formats": formats,
         },
         "text": text,

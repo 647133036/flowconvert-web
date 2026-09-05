@@ -120,6 +120,7 @@ func parseOcrOptions(r *http.Request) service.OcrOptions {
 		Redbox:    parseOcrBool(get("redbox")),
 		Optimize:  parseOcrBool(get("optimize")),
 		Translate: parseOcrBool(get("translate")),
+		Exam:      parseOcrBool(get("exam")),
 		Formats:   formats,
 	}
 }

@@ -503,6 +503,7 @@
           <label class="ocr-check"><input type="checkbox" id="optRedbox"> 红框标记文字位置</label>
           <label class="ocr-check"><input type="checkbox" id="optOptimize" checked> 文本优化（过滤页眉页脚）</label>
           <label class="ocr-check"><input type="checkbox" id="optTranslate"> 翻译为简体中文</label>
+          <label class="ocr-check"><input type="checkbox" id="optExam"> 试卷模式（考试用语纠错）</label>
         </div>
 
         <div class="ocr-export">
@@ -602,6 +603,7 @@
   var optMode = $('optMode'), optQuality = $('optQuality'), optCharset = $('optCharset');
   var optEngine = $('optEngine'), optLang = $('optLang');
   var optRedbox = $('optRedbox'), optOptimize = $('optOptimize'), optTranslate = $('optTranslate');
+  var optExam = $('optExam');
   var fmtBoxes = Array.prototype.slice.call(document.querySelectorAll('.fmt'));
   var btn = $('ocrBtn'), resetBtn = $('ocrResetBtn');
   var statusEl = $('ocrStatus'), progressEl = $('ocrProgress'), progressFill = $('ocrProgressFill');
@@ -1032,6 +1034,7 @@
     formData.append('redbox', optRedbox.checked ? '1' : '0');
     formData.append('optimize', optOptimize.checked ? '1' : '0');
     formData.append('translate', optTranslate.checked ? '1' : '0');
+    formData.append('exam', optExam.checked ? '1' : '0');
     formData.append('formats', readFormats().join(','));
 
     progressFill.style.width = '20%';
