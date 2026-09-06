@@ -541,7 +541,7 @@ func MakeImageAI(client *AIClient, tmpDir, prompt string, width, height int) (st
 	ratio := ratioFromDims(width, height)
 
 	if client.HasAgnes() {
-		imgURL, b64, err := client.GenImageAgnes("agnes-image-2.1-flash", prompt, size, ratio, nil)
+		imgURL, b64, err := client.GenImageAgnes(agnesImageModel, prompt, size, ratio, nil)
 		if err == nil {
 			if dErr := client.DownloadImage(imgURL, b64, dest); dErr == nil {
 				return dest, nil
@@ -571,7 +571,7 @@ func MakeEditedImageAI(client *AIClient, tmpDir, srcPath, prompt string, width, 
 	}
 
 	if client.HasAgnes() {
-		imgURL, b64, err := client.GenImageAgnes("agnes-image-2.1-flash", prompt, size, ratio, []string{dataURI})
+		imgURL, b64, err := client.GenImageAgnes(agnesImageModel, prompt, size, ratio, []string{dataURI})
 		if err == nil {
 			if dErr := client.DownloadImage(imgURL, b64, dest); dErr == nil {
 				return dest, nil
@@ -605,7 +605,7 @@ func MakeComposeImageAI(client *AIClient, tmpDir, prompt string, refPaths []stri
 	}
 
 	if client.HasAgnes() {
-		imgURL, b64, err := client.GenImageAgnes("agnes-image-2.1-flash", prompt, size, ratio, dataURIs)
+		imgURL, b64, err := client.GenImageAgnes(agnesImageModel, prompt, size, ratio, dataURIs)
 		if err == nil {
 			if dErr := client.DownloadImage(imgURL, b64, dest); dErr == nil {
 				return dest, nil

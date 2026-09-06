@@ -64,9 +64,20 @@ def mm_to_px(mm):
 
 
 def remove_background(pil_img):
-    """使用 rembg (u2netp) 去除背景，返回 RGBA 图像"""
+    """使用 rembg (u2net_human_seg) 去除背景，返回 RGBA 图像。
+
+    u2net_human_seg 是人像分割专用模型，能完整保留躯干与四肢；
+    通用的 u2net/u2netp 会把身体局部误判成背景（换底色时身体被吃掉）。
+    模型首次使用自动下载到 ~/.rembg/models/ 并缓存（约 170MB）。
+    sess_opts 用 ORT_ENABLE_BASIC：跳过全图优化，模型加载从 ~17s 降到亚秒级，
+    否则每个请求新建进程加载 170MB 模型会卡 ~36s，页面看起来就像没有响应。
+    """
+    import onnxruntime as ort
     from rembg import remove, new_session
-    session = new_session(model_name="u2netp")
+    opts = ort.SessionOptions()
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    opts.log_severity_level = 3  # ERROR，抑制加载告警
+    session = new_session(model_name="u2net_human_seg", sess_opts=opts)
     result = remove(pil_img, session=session)
     if isinstance(result, (bytes, bytearray)):
         return Image.open(io.BytesIO(result)).convert("RGBA")
@@ -117,40 +128,69 @@ class FaceDetector:
 _detector = None
 _detector_broken = False
 
-_haar = None
+# YuNet 人脸检测模型（OpenCV 官方，Apache-2.0，精度优于 MTCNN）
+_YUNET_MODEL = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", "models", "face", "face_detection_yunet_2023mar.onnx",
+)
+
+_yunet = None
+
+# YuNet 在全分辨率大图上会漏检（人脸在特征图上占比过小）。
+# 先缩放到最长边该值再检测，实测 2000x2800 全分辨率 0 检出，缩到 1280 后正常。
+_YUNET_MAX_SIDE = 1280
 
 
-def _detect_face_haar(img_bgr):
-    """OpenCV 级联人脸检测。mtcnnruntime 缺失时降级用。
-
-    cv2.data.haarcascades 自带 xml，不引入任何新依赖；精度低于 MTCNN，
-    但对正面照足够定位头部。
-    """
-    global _haar
-    if _haar is None:
-        path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
-        if not os.path.exists(path):
-            return None
-        _haar = cv2.CascadeClassifier(path)
+def _yunet_detect_once(img_bgr):
+    """在给定分辨率上跑一次 YuNet，返回 face_rect (x, y, w, h) 或 None。"""
+    global _yunet
+    if _yunet is None:
+        _yunet = cv2.FaceDetectorYN_create(_YUNET_MODEL, "", (320, 320), 0.6, 0.3, 5000)
     h, w = img_bgr.shape[:2]
-    faces = _haar.detectMultiScale(img_bgr, scaleFactor=1.1, minNeighbors=5, minSize=(w // 16, h // 16))
-    if len(faces) == 0:
+    _yunet.setInputSize((w, h))
+    _, faces = _yunet.detect(img_bgr)
+    if faces is None or len(faces) == 0:
         return None
-    x, y, fw, fh = faces[0]
-    return (int(x), int(y), int(fw), int(fh))
+    areas = faces[:, 2] * faces[:, 3]
+    best = faces[int(np.argmax(areas))]
+    return (int(best[0]), int(best[1]), int(best[2]), int(best[3]))
+
+
+def _detect_face_yunet(img_bgr):
+    """YuNet 人脸检测（cv2.FaceDetectorYN），带多尺度重试。
+
+    这不是降级：YuNet 是 OpenCV 官方推荐的现代检测器，精度优于 MTCNN，
+    仅依赖 models/face/ 下的 ONNX 模型，零第三方依赖。
+    多张时取面积最大的主脸（证件照主体），避免背景误检导致的误判失败。
+
+    多尺度：大图先缩到最长边 _YUNET_MAX_SIDE 检测再把坐标还原回原图，
+    缩放失败才用原图重试一次，兼顾大照片与小图特写。
+    """
+    if not os.path.exists(_YUNET_MODEL):
+        return None
+    h, w = img_bgr.shape[:2]
+    max_side = max(w, h)
+    if max_side > _YUNET_MAX_SIDE:
+        s = _YUNET_MAX_SIDE / max_side
+        small = cv2.resize(img_bgr, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
+        box = _yunet_detect_once(small)
+        if box is not None:
+            x, y, fw, fh = box
+            return (int(x / s), int(y / s), int(fw / s), int(fh / s))
+    return _yunet_detect_once(img_bgr)
 
 
 def detect_face(img_bgr):
     global _detector, _detector_broken
     if _detector_broken:
-        return _detect_face_haar(img_bgr)
+        return _detect_face_yunet(img_bgr)
     if _detector is None:
         try:
             _detector = FaceDetector()
         except ImportError:
             _detector_broken = True
-            print("[IDPhoto] mtcnnruntime 不可用，降级为 OpenCV 级联检测", file=sys.stderr)
-            return _detect_face_haar(img_bgr)
+            print("[IDPhoto] mtcnnruntime 不可用，改用 YuNet 人脸检测", file=sys.stderr)
+            return _detect_face_yunet(img_bgr)
     return _detector.detect(img_bgr)
 
 
@@ -390,7 +430,10 @@ def make_idphoto(image_path, out_path, size_key="大一寸", bg_key="白色"):
     with Image.open(image_path) as pil:
         pil = ImageOps.exif_transpose(pil)
         pil = pil.convert("RGB")
-        max_dim = 2000
+        # rembg 内部固定按 320x320 推理，输入超过 1280 不会提升抠图质量，
+        # 只会放大数组占用（2000px 时进程峰值内存翻倍以上，内存吃紧时会拖慢到 60s+）。
+        # 按目标尺寸留 2 倍裁剪余量，最小 1280 保证 YuNet 检测精度。
+        max_dim = min(2000, max(1280, max(tw, th) * 2))
         if pil.width > max_dim or pil.height > max_dim:
             s = max_dim / max(pil.width, pil.height)
             pil = pil.resize((int(pil.width * s), int(pil.height * s)), Image.LANCZOS)
@@ -401,7 +444,7 @@ def make_idphoto(image_path, out_path, size_key="大一寸", bg_key="白色"):
     rgba_np = np.array(rgba)  # HxWx4 (R,G,B,A)
     bgra = np.concatenate([rgba_np[:, :, 2:3], rgba_np[:, :, 1:2], rgba_np[:, :, 0:1], rgba_np[:, :, 3:4]], axis=2)
 
-    # 2. MTCNN 人脸检测（对原图 RGB 转 BGR 进行）
+    # 2. 人脸检测（MTCNN 或 YuNet，对原图 RGB 转 BGR 进行）
     origin_bgr = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
     face_rect = detect_face(origin_bgr)
     if face_rect is None:

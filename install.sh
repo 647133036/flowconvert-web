@@ -5,6 +5,7 @@
 #   bash install.sh              # 系统包走 apt（需要 root）
 #   sudo bash install.sh         # 非 root 时
 #   SKIP_SYSTEM=1 bash install.sh  # 系统包已装好，只装 Python
+#   SKIP_MODELS=1 bash install.sh  # 跳过证件照抠图模型预下载
 #
 # 产物:
 #   .venv/                       Python 虚拟环境
@@ -16,7 +17,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="${PYTHON:-python3}"
 VENV="${VENV:-$ROOT/.venv}"
 
-echo "[1/3] 系统依赖"
+echo "[1/4] 系统依赖"
 if [ "${SKIP_SYSTEM:-0}" = "1" ]; then
   echo "  已跳过 (SKIP_SYSTEM=1)"
 elif command -v apt-get >/dev/null 2>&1; then
@@ -30,13 +31,31 @@ else
   echo "  非 apt 系统，请手动安装: ffmpeg poppler-utils tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng"
 fi
 
-echo "[2/3] Python 依赖 ($VENV)"
+echo "[2/4] Python 依赖 ($VENV)"
 if [ ! -x "$VENV/bin/python" ]; then
   "$PY" -m venv "$VENV"
 fi
 "$VENV/bin/pip" install -q -r "$ROOT/requirements.txt"
 
-echo "[3/3] 校验"
+echo "[3/4] 证件照抠图模型预热 (u2net_human_seg, ~170MB)"
+# 不预热则首个证件照请求要现下载模型，页面会像卡死（曾因此误判"无法生成预览"）
+if [ "${SKIP_MODELS:-0}" = "1" ]; then
+  echo "  已跳过 (SKIP_MODELS=1)"
+else
+  "$VENV/bin/python" - <<'PYEOF'
+try:
+    import onnxruntime as ort
+    from rembg import new_session
+    opts = ort.SessionOptions()
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    new_session("u2net_human_seg", sess_opts=opts)
+    print("  抠图模型已缓存")
+except Exception as e:
+    print("  抠图模型下载失败（不影响安装，首次使用时会自动重试）:", e)
+PYEOF
+fi
+
+echo "[4/4] 校验"
 "$VENV/bin/python" - <<'PYEOF'
 import importlib.util
 mods = [

@@ -39,6 +39,17 @@ func (h *VideoGenH) safeJobErr(jobID string, err error) {
 	h.Jobs.SetError(jobID, "视频生成失败，请稍后重试")
 }
 
+// parseForm parses the request body as either a multipart form (browser
+// uploads) or an urlencoded form (curl -d, scripts). Calling
+// ParseMultipartForm on a urlencoded request returns http.ErrNotMultipart,
+// which the caller reports as a misleading "body too large" error.
+func parseForm(r *http.Request, maxMem int64) error {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		return r.ParseMultipartForm(maxMem)
+	}
+	return r.ParseForm()
+}
+
 // HandleTextVideo: POST /api/convert/video/text
 // Creates an async job and returns its task_id immediately; progress is
 // polled via GET /api/convert/video/task/{id}.
@@ -48,7 +59,7 @@ func (h *VideoGenH) HandleTextVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseMultipartForm(10 << 20); err != nil {
+	if err := parseForm(r, 10<<20); err != nil {
 		h.writeErr(w, http.StatusBadRequest, "请求体过大")
 		return
 	}
@@ -100,7 +111,7 @@ func (h *VideoGenH) HandleTextVideo(w http.ResponseWriter, r *http.Request) {
 			} else {
 				h.Jobs.SetNotice(job.ID, "AI 不可用，已降级为本地合成视频")
 			}
-			dest, genErr = service.MakeTextVideo(tmp, prompt, duration)
+			dest, genErr = service.MakeTextVideo(tmp, prompt, aspectRatio, duration)
 		}
 		if genErr != nil {
 			fmt.Fprintf(os.Stderr, "[VideoTextJob %s] FINAL ERROR: %v\n", job.ID, genErr)
@@ -289,7 +300,7 @@ func (h *VideoGenH) HandleRefVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	aspectRatio := validAspectRatio(strings.TrimSpace(r.FormValue("aspect_ratio")))
 
-	if err := r.ParseMultipartForm(20 << 20); err != nil {
+	if err := parseForm(r, 20<<20); err != nil {
 		h.writeErr(w, http.StatusBadRequest, "上传文件大小超限（单文件最大20MB）")
 		return
 	}

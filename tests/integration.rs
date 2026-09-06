@@ -580,7 +580,6 @@ async fn test_ocr_upload_runs_and_completes() {
         let v: serde_json::Value = serde_json::from_slice(&p).unwrap();
         status = v["status"].as_str().unwrap_or("running").to_string();
         if status != "running" {
-            eprintln!("OCR TASK DEBUG: {}", serde_json::to_string(&v).unwrap_or_default());
             break;
         }
     }

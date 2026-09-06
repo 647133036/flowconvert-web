@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,8 +36,15 @@ func (c *ConvertH) writeErr(w http.ResponseWriter, status int, msg string) {
 // safeErr returns a user-friendly generic message for 422 responses,
 // logging the full error to stderr. Internal paths/command output
 // should never reach the client.
+// Errors wrapped as *service.UserFacingError are intentional client-facing
+// messages (e.g. "未检测到清晰人脸") and are passed through verbatim.
 func (c *ConvertH) safeErr(w http.ResponseWriter, err error) {
 	fmt.Fprintf(os.Stderr, "[Convert] error: %v\n", err)
+	var ufe *service.UserFacingError
+	if errors.As(err, &ufe) {
+		c.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"success": false, "error": ufe.Msg})
+		return
+	}
 	c.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"success": false, "error": "处理失败，请稍后重试"})
 }
 

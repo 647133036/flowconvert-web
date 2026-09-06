@@ -2,6 +2,7 @@ package service
 
 import (
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -49,5 +50,37 @@ func TestCheckHost(t *testing.T) {
 	}
 	if err := checkHost("192.168.1.1:8080"); err == nil {
 		t.Error("expected error for private IP with port")
+	}
+}
+
+func TestExtractWebText(t *testing.T) {
+	page := `<!DOCTYPE html>
+<html><head><title>T</title><style>.a{color:red}</style><script>alert('x')</script></head>
+<body>
+<h1>Hello &amp; Welcome</h1>
+<p>This is <b>bold</b> text.</p>
+<div>Second line<br>Third line</div>
+<!-- hidden comment -->
+</body></html>`
+
+	got := ExtractWebText(page)
+
+	if !strings.Contains(got, "Hello & Welcome") {
+		t.Errorf("expected decoded entity, got %q", got)
+	}
+	if !strings.Contains(got, "This is bold text.") {
+		t.Errorf("expected inline tag stripped, got %q", got)
+	}
+	if !strings.Contains(got, "Second line") || !strings.Contains(got, "Third line") {
+		t.Errorf("expected br/block content on separate lines, got %q", got)
+	}
+	if strings.Contains(got, "alert") {
+		t.Errorf("script content should be removed, got %q", got)
+	}
+	if strings.Contains(got, "color:red") {
+		t.Errorf("style content should be removed, got %q", got)
+	}
+	if strings.Contains(got, "hidden comment") {
+		t.Errorf("comment should be removed, got %q", got)
 	}
 }

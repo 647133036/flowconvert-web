@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +22,7 @@ var (
 	ErrTooLarge = errors.New("文件超过大小限制")
 	ErrNotImage = errors.New("URL 内容不是有效图片")
 	ErrNotDoc   = errors.New("URL 内容不是图片或 PDF")
+	ErrNotWeb   = errors.New("URL 内容不是网页")
 )
 
 func isBlockedIP(ip net.IP) bool {
@@ -81,6 +84,24 @@ func ssrfSafeDialer() *net.Dialer {
 	}
 }
 
+// safeHTTPClient returns an HTTP client that enforces SSRF-safe dialing and
+// validates every redirect hop. Shared by the URL-download helpers below.
+func safeHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: &http.Transport{DialContext: ssrfSafeDialer().DialContext},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("重定向次数过多")
+			}
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return ErrBadURL
+			}
+			return checkHost(req.URL.Hostname())
+		},
+	}
+}
+
 // FetchImage downloads an image URL into tmpDir, enforcing SSRF + size + MIME constraints.
 func FetchImage(tmpDir, rawURL string, maxBytes int64) (string, error) {
 	if rawURL == "" {
@@ -97,20 +118,7 @@ func FetchImage(tmpDir, rawURL string, maxBytes int64) (string, error) {
 		return "", err
 	}
 
-	client := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: &http.Transport{DialContext: ssrfSafeDialer().DialContext},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return errors.New("重定向次数过多")
-			}
-			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-				return ErrBadURL
-			}
-			return checkHost(req.URL.Hostname())
-		},
-	}
-	resp, err := client.Get(rawURL)
+	resp, err := safeHTTPClient().Get(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("下载失败: %w", err)
 	}
@@ -166,20 +174,7 @@ func FetchFile(tmpDir, rawURL string, maxBytes int64, allowExts []string) (strin
 		return "", "", err
 	}
 
-	client := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: &http.Transport{DialContext: ssrfSafeDialer().DialContext},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return errors.New("重定向次数过多")
-			}
-			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-				return ErrBadURL
-			}
-			return checkHost(req.URL.Hostname())
-		},
-	}
-	resp, err := client.Get(rawURL)
+	resp, err := safeHTTPClient().Get(rawURL)
 	if err != nil {
 		return "", "", fmt.Errorf("下载失败: %w", err)
 	}
@@ -251,4 +246,88 @@ func containsStr(list []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// FetchWebPage downloads an HTML page through the SSRF-safe client and returns
+// its raw body as a string. It is used by the URL translation endpoint.
+func FetchWebPage(rawURL string, maxBytes int64) (string, error) {
+	if rawURL == "" {
+		return "", ErrBadURL
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", ErrBadURL
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", ErrBadURL
+	}
+	if err := checkHost(u.Hostname()); err != nil {
+		return "", err
+	}
+
+	resp, err := safeHTTPClient().Get(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("下载失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("下载失败: HTTP %d", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct != "" && !isWebContentType(ct) {
+		return "", ErrNotWeb
+	}
+	if resp.ContentLength > 0 && resp.ContentLength > maxBytes {
+		return "", ErrTooLarge
+	}
+	if maxBytes <= 0 {
+		maxBytes = 5 << 20
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("下载失败: %w", err)
+	}
+	if int64(len(body)) > maxBytes {
+		return "", ErrTooLarge
+	}
+	return string(body), nil
+}
+
+func isWebContentType(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]))
+	return ct == "text/html" || ct == "text/plain" ||
+		ct == "application/xhtml+xml" || ct == "application/xml"
+}
+
+var (
+	reScript  = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
+	reStyle   = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
+	reComment = regexp.MustCompile(`(?s)<!--.*?-->`)
+	reBr      = regexp.MustCompile(`(?i)<br\s*/?>`)
+	reBlock   = regexp.MustCompile(`(?is)</?(p|div|h[1-6]|li|tr|td|th|section|article|header|footer|ul|ol|table|blockquote|pre)[^>]*>`)
+	reTag     = regexp.MustCompile(`(?s)<[^>]+>`)
+	reSpace   = regexp.MustCompile(`[ \t]+`)
+)
+
+// ExtractWebText strips scripts, styles, comments and markup from an HTML page,
+// leaving a readable plain-text version suitable for translation.
+func ExtractWebText(page string) string {
+	s := reScript.ReplaceAllString(page, "")
+	s = reStyle.ReplaceAllString(s, "")
+	s = reComment.ReplaceAllString(s, "")
+	s = reBr.ReplaceAllString(s, "\n")
+	s = reBlock.ReplaceAllString(s, "\n")
+	s = reTag.ReplaceAllString(s, "")
+	s = html.UnescapeString(s)
+
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(reSpace.ReplaceAllString(line, " "))
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }

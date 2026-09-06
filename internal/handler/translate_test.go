@@ -106,6 +106,52 @@ func TestValidLang(t *testing.T) {
 	}
 }
 
+func TestHandleTranslateURLMethod(t *testing.T) {
+	cfg := &config.Config{TmpDir: t.TempDir()}
+	store := NewFileStore(cfg)
+	h := &TranslateH{Cfg: cfg, Store: store}
+
+	req := httptest.NewRequest("GET", "/api/translate/url", nil)
+	w := httptest.NewRecorder()
+	h.HandleTranslateURL(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for GET, got %d", w.Code)
+	}
+}
+
+func TestHandleTranslateURLEmptyURL(t *testing.T) {
+	cfg := &config.Config{TmpDir: t.TempDir()}
+	store := NewFileStore(cfg)
+	h := &TranslateH{Cfg: cfg, Store: store}
+
+	req := httptest.NewRequest("POST", "/api/translate/url",
+		strings.NewReader(`{"url":"","source":"en","target":"zh"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.HandleTranslateURL(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty url, got %d", w.Code)
+	}
+}
+
+func TestHandleTranslateURLInvalidScheme(t *testing.T) {
+	cfg := &config.Config{TmpDir: t.TempDir()}
+	store := NewFileStore(cfg)
+	h := &TranslateH{Cfg: cfg, Store: store}
+
+	req := httptest.NewRequest("POST", "/api/translate/url",
+		strings.NewReader(`{"url":"ftp://example.com/page","source":"en","target":"zh"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.HandleTranslateURL(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid scheme, got %d", w.Code)
+	}
+}
+
 func TestHandleTranslateInvalidLangFallback(t *testing.T) {
 	cfg := &config.Config{TmpDir: t.TempDir()}
 	store := NewFileStore(cfg)

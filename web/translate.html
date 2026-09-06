@@ -100,6 +100,16 @@
       <div id="translateStatus" class="translate-status"></div>
     </div>
 
+    <!-- ═══ 链接翻译 ═══ -->
+    <div class="url-translate-section" style="margin-top:1.25rem;">
+      <p style="text-align:center;color:var(--text-muted,#999);font-size:0.9rem;margin-bottom:0.75rem;">— 或翻译网页链接 —</p>
+      <div style="display:flex;gap:0.5rem;">
+        <input type="text" id="urlInput" class="url-input" placeholder="粘贴网页链接 https://..." style="flex:1;padding:0.75rem 1rem;border:1px solid var(--border,#e5e7eb);border-radius:8px;font-size:0.95rem;">
+        <button id="translateUrlBtn" class="btn btn-primary" style="white-space:nowrap;">翻译链接</button>
+      </div>
+      <div id="urlStatus" class="translate-status" style="margin-top:0.5rem;"></div>
+    </div>
+
     <!-- ═══ 文件翻译 ═══ -->
     <div class="file-translate-section">
       <p style="text-align:center;color:var(--text-muted,#999);font-size:0.9rem;margin-bottom:0.75rem;">— 或翻译文档 —</p>
@@ -172,6 +182,13 @@
   const detectedLang = document.getElementById('detectedLang');
   const statusEl = document.getElementById('translateStatus');
 
+  const langNames = {
+    'zh': '中文', 'en': '英语', 'ja': '日语', 'ko': '韩语',
+    'fr': '法语', 'de': '德语', 'es': '西班牙语', 'pt': '葡萄牙语',
+    'ru': '俄语', 'ar': '阿拉伯语', 'th': '泰语', 'vi': '越南语',
+    'it': '意大利语', 'nl': '荷兰语', 'pl': '波兰语', 'tr': '土耳其语'
+  };
+
   sourceText.addEventListener('input', function() {
     sourceCharCount.textContent = this.value.length;
   });
@@ -243,12 +260,6 @@
       if (data.success) {
         resultText.value = data.translated_text;
         if (data.detected_language) {
-          const langNames = {
-            'zh': '中文', 'en': '英语', 'ja': '日语', 'ko': '韩语',
-            'fr': '法语', 'de': '德语', 'es': '西班牙语', 'pt': '葡萄牙语',
-            'ru': '俄语', 'ar': '阿拉伯语', 'th': '泰语', 'vi': '越南语',
-            'it': '意大利语', 'nl': '荷兰语', 'pl': '波兰语', 'tr': '土耳其语'
-          };
           detectedLang.textContent = '检测到: ' + (langNames[data.detected_language] || data.detected_language);
         }
         statusEl.textContent = '✅ 翻译完成';
@@ -263,6 +274,74 @@
     } finally {
       translateBtn.disabled = false;
       translateBtn.textContent = '翻 译';
+    }
+  }
+
+  // ── 链接翻译 ──
+  const urlInput = document.getElementById('urlInput');
+  const translateUrlBtn = document.getElementById('translateUrlBtn');
+  const urlStatus = document.getElementById('urlStatus');
+
+  translateUrlBtn.addEventListener('click', doTranslateUrl);
+  urlInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      doTranslateUrl();
+    }
+  });
+
+  async function doTranslateUrl() {
+    const url = urlInput.value.trim();
+    if (!url) {
+      urlStatus.textContent = '⚠️ 请输入网页链接';
+      urlStatus.className = 'translate-status error';
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      urlStatus.textContent = '⚠️ 链接需以 http:// 或 https:// 开头';
+      urlStatus.className = 'translate-status error';
+      return;
+    }
+
+    translateUrlBtn.disabled = true;
+    translateUrlBtn.textContent = '抓取中...';
+    urlStatus.textContent = '';
+    urlStatus.className = 'translate-status';
+
+    try {
+      const resp = await fetch('/api/translate/url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: url,
+          source: sourceLang.value,
+          target: targetLang.value
+        })
+      });
+
+      const data = await resp.json();
+
+      if (data.success) {
+        resultText.value = data.translated_text;
+        if (data.source_text) {
+          sourceText.value = data.source_text;
+          sourceCharCount.textContent = data.source_text.length;
+        }
+        if (data.detected_language) {
+          detectedLang.textContent = '检测到: ' + (langNames[data.detected_language] || data.detected_language);
+        }
+        urlStatus.textContent = '✅ 网页翻译完成';
+        urlStatus.className = 'translate-status success';
+      } else {
+        urlStatus.textContent = '❌ ' + (data.error || '翻译失败');
+        urlStatus.className = 'translate-status error';
+      }
+    } catch (err) {
+      urlStatus.textContent = '❌ 网络错误: ' + err.message;
+      urlStatus.className = 'translate-status error';
+    } finally {
+      translateUrlBtn.disabled = false;
+      translateUrlBtn.textContent = '翻译链接';
     }
   }
 

@@ -357,6 +357,97 @@ def repair_exam_phrases(text):
     return out
 
 
+# ── 英文通用纠错与选项规范化 ─────────────────────────────
+
+
+# 英文句首被 OCR 误读的常见词形。用 \b 词边界限定：rt's/lt's 在英文里
+# 不是合法词形，替换几乎不会误伤（art's 里 rt 前不是词边界，不命中）。
+# 撇号必须兼容直撇 ' (U+0027) 与弯撇 ’ (U+2019)：tesseract/PP-OCR 常把
+# 撇号读成弯撇，若只用直撇则 rt's 这类修复整体失效。
+_ENGLISH_LEAD_FIXES = (
+    (re.compile(r"\brt['’]s\b"), "It's"),
+    (re.compile(r"\blt['’]s\b"), "It's"),
+    (re.compile(r"(^|[.!?]\s+)it['’]s\b"), r"\1It's"),
+)
+
+# 英语选项混淆矩阵：低分辨率下 tesseract/PP-OCR 把冠词答案 a、分隔符「；」、
+# 斜杠「/」互相混读，只能靠完整选项段（含选项头误读）精确替换。key 是实测
+# 乱码选项段、value 是标准形式。仅 exam 模式 + 选项块内启用，key 含选项头
+# 或误读特征，普通英文句子几乎不会命中，误伤低。
+EXAM_OPTION_FIXES = (
+    ("A.aia", "A.a；a"),
+    ("B./:a", "B./；a"),
+    ("@,.n%/", "C.a；/"),
+    ("D,//", "D./；/"),
+)
+
+_OPTION_HEAD = re.compile(r"\b([A-D])[.．,，](\S)")
+
+
+def _repair_english(text):
+    """把英文句首被 OCR 误读的首字母补回（It's → rt's）。始终启用。"""
+    if not text:
+        return text
+    out = text
+    for pat, good in _ENGLISH_LEAD_FIXES:
+        out = pat.sub(good, out)
+    return out
+
+
+def _is_option_block(text):
+    """判断一行是否为「A. … B. … C. … D. …」结构的单选题选项块。
+
+    选项头允许被误读（如 C 读成 @、D. 读成 D,），只要还能检出至少 3 个
+    A-D 打头的段就按选项块处理；普通英文句子不会出现这种结构。
+    """
+    if not text:
+        return False
+    return len(re.findall(r"(?:^|\s)[A-D][.．,，]", text)) >= 3
+
+
+def _repair_option_block(text):
+    """对选项块做完整串混淆矩阵替换，仅 exam 模式 + 选项块启用。"""
+    if not _is_option_block(text):
+        return text
+    out = text
+    for bad, good in EXAM_OPTION_FIXES:
+        out = out.replace(bad, good)
+    return out
+
+
+def _normalize_options(text, conf):
+    """把 OCR 乱码的选项格式规范化，仅对选项块生效、按置信度分级。
+
+    始终做安全修复：清理填空横线、选项头「A.xxx → A. xxx」、分隔符统一
+    （,，→；）、重复标点收敛。低置信度（conf<0.6）下才启用符号混淆替换
+    （0→/、:→；），避免把数学/时间选项里合法的 0 与 : 改坏。
+    """
+    if not text or not _is_option_block(text):
+        return text
+    out = re.sub(r"-{3,}", "", text)
+    out = _OPTION_HEAD.sub(r"\1. \2", out)
+    out = out.replace("，", "；").replace(",", "；")
+    out = re.sub(r"[,;:]{2,}", "；", out)
+    if _EXAM_MODE and conf is not None and conf < 0.6:
+        out = out.replace("0", "/").replace(":", "；")
+    return out
+
+
+def finalize_line_text(text, conf=None):
+    """行的文本后处理入口：英文纠错 → 选项混淆矩阵 → 选项规范化 → 中文修复。
+
+    通用层（英文词修正、选项头格式、分隔符统一）始终启用、误伤率低；选项
+    混淆矩阵与中文固定搭配仅在 exam 模式启用。
+    """
+    text = _repair_english(text)
+    if _EXAM_MODE:
+        text = _repair_option_block(text)
+    text = _normalize_options(text, conf)
+    if _EXAM_MODE:
+        text = repair_exam_phrases(text)
+    return text
+
+
 # ── 繁简转换 ─────────────────────────────────────────────
 
 
@@ -423,6 +514,8 @@ class TesseractEngine:
         self.lang = self._pick_lang(lang, mode, langs)
         # 中文行会用单语言模型再跑一遍：多语言组合会把简体读成繁体并夹杂拉丁乱码
         self.cjk_lang = next((c for c in ("chi_sim", "chi_tra") if c in langs), None)
+        # 英文行会用 eng 单语言放大重识别，消除中英混排把英文误读成中文的问题
+        self.eng_ok = "eng" in langs
 
         self.profile = QUALITY_PROFILE.get(quality, QUALITY_PROFILE["normal"])
         self.dpi = self.profile["dpi"]
@@ -723,7 +816,80 @@ class TesseractEngine:
             return words
         bw = self._ink(gray)
         words = self._refine_roman_prefixes(gray, bw, words)
-        return self._refine_cjk_lines(gray, bw, words)
+        words = self._refine_cjk_lines(gray, bw, words)
+        return self._refine_latin_lines(gray, bw, words)
+
+    @staticmethod
+    def _looks_latin(words):
+        """判断一行是否以拉丁字母为主（英文行），用于触发 eng 单语言重识别。"""
+        text = "".join(w.text for w in words)
+        nsp = sum(1 for ch in text if not ch.isspace())
+        if nsp < 4:
+            return False
+        latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
+        cjk = sum(1 for ch in text if _is_cjk(ch))
+        return latin >= 3 and latin * 2 >= nsp and cjk * 3 < nsp
+
+    @staticmethod
+    def _has_cjk_run(text):
+        """行内是否存在连续(≥2)中文字符。
+
+        真实的中文注解（如英语试卷里 patients(病人) 的「病人」）是连续中文，
+        而中英混排误读（如 the→品）通常是孤立的单个汉字。用连续性区分两者，
+        避免 eng 重识别把真实中文注解毁成乱码。
+        """
+        run = 0
+        for ch in text:
+            if _is_cjk(ch):
+                run += 1
+                if run >= 2:
+                    return True
+            else:
+                run = 0
+        return False
+
+    def _refine_latin_lines(self, gray, bw, words):
+        """英文为主的行用 eng 单语言放大重识别，消除中英混排造成的孤立汉字误读。
+
+        中英混排页面（如英语试卷）首遍用 chi_sim+chi_tra+eng 识别时，英文小字常被
+        读成中文（如 the→品）。这类行既非中文为主（不满足 _looks_cjk），也不走
+        PP-OCR 路由（中文占比不足），此前没有任何修正路径。这里对称地裁行用 eng
+        放大重识别，仅在确实消除了中文误读（CJK 计数下降）时替换。
+
+        两道保护避免改坏已读对的行：连续中文说明是真实中文注解（如「病人」），
+        直接跳过；含下划线/长横线说明是完形填空的空格标记，eng 会把它读丢，也跳过。
+        """
+        if not self.eng_ok:
+            return words
+        out = []
+        for ln in cluster_lines(words):
+            orig = ln.words
+            text = "".join(w.text for w in orig)
+            if not self._looks_latin(orig) or self._has_cjk_run(text):
+                out.extend(orig)
+                continue
+            if any(ch in text for ch in "_—－"):
+                out.extend(orig)
+                continue
+            cjk_before = sum(1 for ch in text if _is_cjk(ch))
+            if cjk_before == 0:
+                out.extend(orig)
+                continue
+            cand = self._crop_words(
+                gray, ln.x - 2, ln.y - 2, ln.x + ln.w + 2, ln.y + ln.h + 2,
+                7, "eng", fx=2.0)
+            if not cand:
+                out.extend(orig)
+                continue
+            cjk_after = sum(1 for ch in "".join(w.text for w in cand) if _is_cjk(ch))
+            if cjk_after < cjk_before:
+                out.extend(cand)
+            else:
+                out.extend(orig)
+        if not out:
+            return words
+        out.sort(key=lambda w: (w.y, w.x))
+        return out
 
 
     @staticmethod
@@ -914,7 +1080,7 @@ def _det_lang():
     return next(iter(avail), "eng")
 
 
-def detect_orientation(image, max_side=760, accept_score=0.6):
+def detect_orientation(image, max_side=760, accept_score=60):
     """检测图像需顺时针旋转多少度(0/90/180/270)才能正立。
 
     tesseract OSD 对中英混排与细长条带不可靠, 改用四方向置信度择优:
@@ -922,7 +1088,11 @@ def detect_orientation(image, max_side=760, accept_score=0.6):
 
     两个提速手段: 采样图缩到 max_side 边长(方向判别不需要原图分辨率),
     以及按宽高比排序候选方向后、首个方向置信度达标即收敛。
+
+    注意 accept_score 的单位是 tesseract 置信度(0-100), 不是 0-1。
     """
+    if accept_score <= 1.0:
+        accept_score = 60
     import pytesseract
     from PIL import Image
 
@@ -1185,13 +1355,14 @@ def cluster_lines(words):
     for g in groups:
         items = sorted(g, key=lambda i: i.x)
         heights = sorted(i.h for i in items)
+        conf = sum(i.conf for i in items) / len(items)
         ln = Line(
-            text=repair_exam_phrases(_join_words(items)) if _EXAM_MODE else _join_words(items),
+            text=finalize_line_text(_join_words(items), conf),
             x=min(i.x for i in items),
             y=min(i.y for i in items),
             w=max(i.x + i.w for i in items) - min(i.x for i in items),
             h=max(i.h for i in items),
-            conf=sum(i.conf for i in items) / len(items),
+            conf=conf,
             size=float(heights[len(heights) // 2]),
             page=items[0].page,
             words=items,

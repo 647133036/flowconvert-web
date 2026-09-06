@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -74,10 +75,10 @@ func (h *TranslateH) HandleTranslate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success":          true,
-		"translated_text":  res.Text,
+		"success":           true,
+		"translated_text":   res.Text,
 		"detected_language": res.Detected,
-		"engine":           res.Engine,
+		"engine":            res.Engine,
 	})
 }
 
@@ -159,5 +160,71 @@ func (h *TranslateH) HandleTranslateFile(w http.ResponseWriter, r *http.Request)
 		"download_url":  dl,
 		"original_name": header.Filename,
 		"output_name":   outName,
+	})
+}
+
+// HandleTranslateURL: POST /api/translate/url
+func (h *TranslateH) HandleTranslateURL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{"success": false, "error": "仅支持POST请求"})
+		return
+	}
+	var req struct {
+		URL    string `json:"url"`
+		Source string `json:"source"`
+		Target string `json:"target"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "请求参数错误"})
+		return
+	}
+	req.URL = strings.TrimSpace(req.URL)
+	if req.URL == "" {
+		h.writeJSON(w, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "请输入要翻译的网页链接"})
+		return
+	}
+	if !validLang(req.Source) {
+		req.Source = "auto"
+	}
+	if !validLang(req.Target) || req.Target == "auto" {
+		req.Target = "zh"
+	}
+
+	page, err := service.FetchWebPage(req.URL, 5<<20)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[TranslateURL] fetch error: %v\n", err)
+		switch {
+		case errors.Is(err, service.ErrBadURL) || errors.Is(err, service.ErrNotWeb):
+			h.writeJSON(w, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "无效或不允许访问的链接"})
+		case errors.Is(err, service.ErrTooLarge):
+			h.writeJSON(w, http.StatusBadRequest, map[string]interface{}{"success": false, "error": "网页内容过大"})
+		default:
+			h.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"success": false, "error": "网页抓取失败，请稍后重试"})
+		}
+		return
+	}
+
+	text := service.ExtractWebText(page)
+	if strings.TrimSpace(text) == "" {
+		h.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"success": false, "error": "未能从网页提取到可翻译的文本"})
+		return
+	}
+	if len([]rune(text)) > 5000 {
+		text = string([]rune(text)[:5000])
+	}
+
+	res, err := service.TranslateText(text, req.Source, req.Target)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[TranslateURL] error: %v\n", err)
+		h.writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{"success": false, "error": "翻译失败，请稍后重试"})
+		return
+	}
+	h.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":           true,
+		"translated_text":   res.Text,
+		"detected_language": res.Detected,
+		"engine":            res.Engine,
+		"source_text":       text,
 	})
 }

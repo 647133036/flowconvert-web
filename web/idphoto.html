@@ -124,7 +124,7 @@
   <!-- 状态区 -->
   <div id="status" class="status-panel" hidden>
     <div class="spinner"></div>
-    <p id="statusText">🖼️ 正在处理，这可能需要10-30秒...</p>
+    <p id="statusText">🖼️ 正在处理，首次需加载模型，约 10-30 秒...</p>
   </div>
 
   <!-- 结果区 -->
@@ -251,7 +251,7 @@ els.convertBtn.addEventListener('click', async () => {
   isConverting = true;
   els.status.hidden = false;
   els.result.hidden = true;
-  els.statusText.textContent = '🖼️ 正在处理，这可能需要10-30秒...';
+  els.statusText.textContent = '🖼️ 正在处理，首次需加载模型，约 10-30 秒...';
 
   try {
     const formData = new FormData();
@@ -274,6 +274,14 @@ els.convertBtn.addEventListener('click', async () => {
 
     els.status.hidden = true;
     els.result.hidden = false;
+    // 复位上一次失败留下的错误态（红字/红叉图标/隐藏下载按钮）
+    els.resultText.style.color = '';
+    els.downloadLink.style.display = '';
+    els.resultIcon.innerHTML = `
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2">
+        <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+        <polyline points="22 4 12 14.01 9 11.01"/>
+      </svg>`;
     els.resultText.textContent = `✅ 证件照生成成功！${selectedSize} / ${selectedColor}底`;
     els.resultPreviewImg.src = blobUrl;
 
@@ -293,6 +301,8 @@ els.convertBtn.addEventListener('click', async () => {
     els.resultText.textContent = '❌ ' + (err.message || '生成失败');
     els.resultText.style.color = '#ef4444';
     els.downloadLink.style.display = 'none';
+    // 清掉上一次成功留下的结果图，避免失败时仍显示旧证件照
+    els.resultPreviewImg.removeAttribute('src');
   } finally {
     isConverting = false;
   }

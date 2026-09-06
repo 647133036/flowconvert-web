@@ -1,10 +1,138 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestConcatVideosMergesMismatchedSegments(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not available")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe not available")
+	}
+
+	dir := t.TempDir()
+
+	// Two segments with different resolution, frame rate and GOP layout,
+	// mimicking independently generated AI segments.
+	mk := func(name, size string, fps, dur, gop int) (string, int) {
+		path := filepath.Join(dir, name)
+		cmd := exec.CommandContext(ctxWithTimeout(t, 3*time.Minute), "ffmpeg", "-y", "-v", "error",
+			"-f", "lavfi", "-i", fmt.Sprintf("testsrc2=size=%s:rate=%d:duration=%d", size, fps, dur),
+			"-r", strconv.Itoa(fps), "-c:v", "libx264", "-preset", "fast",
+			"-g", strconv.Itoa(gop), "-keyint_min", strconv.Itoa(gop), "-sc_threshold", "0",
+			"-pix_fmt", "yuv420p", path)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("segment %s failed: %v %s", name, err, out)
+		}
+		n, err := countVideoFrames(path)
+		if err != nil {
+			t.Fatalf("count %s: %v", name, err)
+		}
+		return path, n
+	}
+
+	a, na := mk("a.mp4", "1280x720", 30, 6, 60)
+	b, nb := mk("b.mp4", "1216x704", 24, 6, 32)
+	if na == 0 || nb == 0 {
+		t.Fatalf("empty segment: a=%d b=%d", na, nb)
+	}
+
+	dest, err := concatVideos(dir, []string{a, b}, filepath.Join(dir, "out.mp4"))
+	if err != nil {
+		t.Fatalf("concatVideos failed: %v", err)
+	}
+
+	// No input frame may be dropped. A 30fps+24fps pair must resolve to
+	// 360 frames at the output rate, not the 290 a plain concat produces.
+	total := float64(na)/30 + float64(nb)/24
+	wantFrames := int(math.Round(total * 30))
+	got, err := countVideoFrames(dest)
+	if err != nil {
+		t.Fatalf("count output frames: %v", err)
+	}
+	if got != wantFrames {
+		t.Errorf("frame count = %d, want %d (input %d@30 + %d@24)", got, wantFrames, na, nb)
+	}
+
+	// Backward PTS at the splice is the frame-jump symptom: stream-copying
+	// mismatched segments produced 15 of them.
+	neg, err := countBackwardPTS(dest)
+	if err != nil {
+		t.Fatalf("probe pts: %v", err)
+	}
+	if neg != 0 {
+		t.Errorf("concat produced %d backward PTS intervals at the splice", neg)
+	}
+
+	dur, err := videoDuration(dest)
+	if err != nil {
+		t.Fatalf("probe duration: %v", err)
+	}
+	if math.Abs(dur-total) > 0.2 {
+		t.Errorf("duration = %.3fs, want ~%.3fs", dur, total)
+	}
+}
+
+func ctxWithTimeout(t *testing.T, d time.Duration) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func countVideoFrames(path string) (int, error) {
+	out, err := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0",
+		"-count_frames", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", path).Output()
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(out)))
+}
+
+func videoDuration(path string) (float64, error) {
+	out, err := exec.Command("ffprobe", "-v", "error",
+		"-show_entries", "format=duration", "-of", "csv=p=0", path).Output()
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+}
+
+func countBackwardPTS(path string) (int, error) {
+	out, err := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0",
+		"-show_entries", "frame=pts_time", "-of", "csv=p=0", path).Output()
+	if err != nil {
+		return 0, err
+	}
+	neg, prev, first := 0, 0.0, true
+	for _, line := range strings.Split(string(out), "\n") {
+		s := strings.TrimSpace(line)
+		if s == "" {
+			continue
+		}
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			continue
+		}
+		if !first && v < prev {
+			neg++
+		}
+		prev, first = v, false
+	}
+	return neg, nil
+}
 
 func TestClampSeconds(t *testing.T) {
 	tests := []struct {
@@ -284,5 +412,104 @@ func TestMarshalVideoPayloadRefsArray(t *testing.T) {
 		if r.(string) != refs[i] {
 			t.Errorf("refs[%d] = %q, want %q", i, r.(string), refs[i])
 		}
+	}
+}
+
+func TestSegmentStagePromptContinuityDirective(t *testing.T) {
+	prompt := "枫叶红，两个人，回忆往事"
+
+	if got := segmentStagePrompt(prompt, 0, 3); strings.Contains(got, "严格延续上一段画面") {
+		t.Errorf("first segment must not carry a continuity directive: %s", got)
+	}
+
+	for i := 1; i < 3; i++ {
+		p := segmentStagePrompt(prompt, i, 3)
+		for _, want := range []string{"严格延续上一段画面", "同一人物", "同一服装", "同一场景"} {
+			if !strings.Contains(p, want) {
+				t.Errorf("segment %d missing continuity requirement %q", i, want)
+			}
+		}
+		if !strings.Contains(p, prompt) {
+			t.Errorf("segment %d lost the user prompt: %s", i, p)
+		}
+	}
+}
+
+func TestSegmentStagePromptAntiLoopDirective(t *testing.T) {
+	prompt := "一位穿红色连衣裙的年轻女子站在秋日枫树林间的小路上"
+
+	if got := segmentStagePrompt(prompt, 0, 4); !strings.Contains(got, "避免同一动作反复循环") {
+		t.Errorf("first segment must demand a non-looping action arc: %s", got)
+	}
+
+	for i := 1; i < 4; i++ {
+		p := segmentStagePrompt(prompt, i, 4)
+		if !strings.Contains(p, "避免反复循环") {
+			t.Errorf("segment %d missing anti-loop directive: %s", i, p)
+		}
+	}
+}
+
+func TestExtractLastFrameDataURI(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not available")
+	}
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.mp4")
+	if out, err := exec.CommandContext(ctxWithTimeout(t, 3*time.Minute), "ffmpeg", "-y", "-v", "error",
+		"-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=2",
+		"-r", "30", "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p", src).CombinedOutput(); err != nil {
+		t.Fatalf("mkvideo failed: %v %s", err, out)
+	}
+
+	uri, err := extractLastFrameDataURI(src, dir, 0)
+	if err != nil {
+		t.Fatalf("extractLastFrameDataURI failed: %v", err)
+	}
+	if !strings.HasPrefix(uri, "data:image/jpeg;base64,") {
+		t.Fatalf("unexpected data URI prefix: %.40s", uri)
+	}
+	if payload := strings.TrimPrefix(uri, "data:image/jpeg;base64,"); len(payload) < 5000 {
+		t.Errorf("data URI payload too small (%d chars), frame may be blank", len(payload))
+	}
+
+	framePath := filepath.Join(dir, "seg_000_lastframe.jpg")
+	jpg, err := os.ReadFile(framePath)
+	if err != nil {
+		t.Fatalf("frame file not written: %v", err)
+	}
+	if len(jpg) < 3 || jpg[0] != 0xFF || jpg[1] != 0xD8 || jpg[2] != 0xFF {
+		t.Errorf("extracted frame is not a JPEG (magic % x)", jpg[:3])
+	}
+
+	// The seek must land on the final frame, not the first: testsrc2 paints a
+	// different frame every tick, so the two endpoints cannot hash alike.
+	lastPNG := filepath.Join(dir, "last.png")
+	firstPNG := filepath.Join(dir, "first.png")
+	if out, err := exec.CommandContext(ctxWithTimeout(t, time.Minute), "ffmpeg", "-y", "-v", "error",
+		"-i", framePath, "-frames:v", "1", "-f", "image2", "-vf", "scale=160:-2", lastPNG).CombinedOutput(); err != nil {
+		t.Fatalf("convert last frame: %v %s", err, out)
+	}
+	if out, err := exec.CommandContext(ctxWithTimeout(t, time.Minute), "ffmpeg", "-y", "-v", "error",
+		"-i", src, "-frames:v", "1", "-f", "image2", "-vf", "scale=160:-2", firstPNG).CombinedOutput(); err != nil {
+		t.Fatalf("convert first frame: %v %s", err, out)
+	}
+	first, err := os.ReadFile(firstPNG)
+	if err != nil {
+		t.Fatalf("read first png: %v", err)
+	}
+	last, err := os.ReadFile(lastPNG)
+	if err != nil {
+		t.Fatalf("read last png: %v", err)
+	}
+	if string(first) == string(last) {
+		t.Error("extracted last frame is identical to the first frame; the -sseof seek is broken")
+	}
+}
+
+func TestExtractLastFrameDataURIEmptyPath(t *testing.T) {
+	if uri, err := extractLastFrameDataURI("", t.TempDir(), 0); err != nil || uri != "" {
+		t.Errorf("empty path should be a no-op, got (%q, %v)", uri, err)
 	}
 }

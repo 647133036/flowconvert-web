@@ -2,7 +2,7 @@
 
 [![Go Version](https://img.shields.io/badge/go-1.25-blue.svg)](https://golang.org/)
 [![License](https://img.shields.io/badge/license-Apache--3.0-green.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.1.2-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/version-v0.1.3-brightgreen.svg)](#)
 
 一个基于 Go 的轻量级文档与媒体转换服务，支持图片转矢量、PDF 转 Office、证件照制作、多语言翻译以及 AI 视频/图像生成。**内置 OCR 引擎，支持扫描版/照片式 PDF 的文字识别。**
 
@@ -16,7 +16,8 @@
 | 证件照 | `POST /api/convert/idphoto` | 一寸/二寸，支持白/蓝/红背景 |
 | 文本翻译 | `POST /api/translate` | 自动检测源语言，多引擎 fallback（Google/DeepL/TranslateCom），无需 API Key |
 | 文件翻译 | `POST /api/translate/file` | 文档翻译下载（支持 PDF/Word/Excel/PPT，含 OCR）|
-| OCR 文字识别 | `POST /api/ocr` | 图片/PDF 提取文字，原版式导出 TXT/Word/Excel/JSON，可翻译为简体中文 |
+| 链接翻译 | `POST /api/translate/url` | 输入网页 URL 直接提取正文并翻译（SSRF 防护）|
+| OCR 文字识别 | `POST /api/ocr` | 图片/PDF 提取文字，原版式导出 TXT/Word/Excel/JSON，可翻译为简体中文，支持「试卷模式」|
 | AI 文生图 | `POST /api/convert/image/text` | 文本生成图像 |
 | AI 视频生成 | `POST /api/convert/video/text` | 文本生成视频（最长 60s）|
 | AI 视频（首尾帧）| `POST /api/convert/video/keyframe` | 首尾帧控制视频生成 |
@@ -45,6 +46,7 @@ PDF 转 Word/Excel 时，若 PDF 无文本层（扫描件、照片式 PDF），�
 - **红框标记**：`redbox=1` 输出每个文字块位置的标注图
 - **文本优化**：`optimize=1` 过滤页眉页脚等噪声（页面默认勾选，接口默认关闭）
 - **翻译**：`translate=1` 额外返回 `translated_text`（简体中文）
+- **试卷模式**：`exam=1` 针对英语/语文试卷启用领域优化——选项答案混淆矩阵（把 `A.aia B./:a` 这类小字号误读还原为 `A.a；a B./；a`）、选项头格式规范化（`A.x → A. x`）、英文词修正（`rt's/lt's → It's`，兼容弯撇号 `’`）；通用文档保持默认关闭，避免过拟合
 - **导出格式**：`formats=txt,docx,xlsx,json`，返回 `downloads` 中的下载链接列表
 - **预览与复制**：识别完成后，页面「开始识别」右侧的「预览」按钮按选中的导出格式分页展示文件内容（TXT 原文、Word 版式、Excel 表格、JSON 结构）；「复制」按钮把识别内容写入剪贴板。两者在识别完成前为禁用态
 - **PDF 优先走文本层**：若 PDF 内嵌可复制文字，直接抽取字符级 bbox（`engine=pdftext`、`from_text_layer=true`），无损且不消耗 OCR 时间；若文本层是乱码（子集字体缺少 ToUnicode 字符映射，抽出来是 `22n2%S25SS iskoe` 这类内容），自动判定为无效并回退到图像 OCR，同时写入 `warnings` 提示
@@ -62,11 +64,37 @@ curl -X POST -F "file=@photo.png" \
 
 ### 环境要求
 
-- Go 1.25+
-- Python 3.8+
-- **Tesseract OCR 引擎**（系统级安装，见下方）
-- Go 依赖：仅标准库
-- Python 依赖：`pdfminer.six`、`python-docx`、`openpyxl`、`Pillow`、`pymupdf`、`pytesseract`、`pdf2image`、`translatepy`、`beautifulsoup4`、`python-pptx`、`reportlab`、`VTracer` 或 `potrace`
+**语言运行时**
+
+| 组件 | 版本要求 | 验证方式 |
+|------|----------|----------|
+| Go | 1.25+（实测 1.25.6） | `go version` |
+| Python | 3.8+（实测 3.11.2） | `python3 --version` |
+
+**系统依赖**（矢量/PDF/OCR/视频功能必需）
+
+| 组件 | 版本（实测） | 用途 |
+|------|--------------|------|
+| Tesseract OCR | 5.3.0（需 `chi_sim` + `eng` 语言包） | 文字识别主引擎 |
+| FFmpeg | 5.1.9 | 视频分段/编码 |
+| Poppler (`pdftoppm`) | 22.12.0 | PDF 页面渲染 |
+| Inkscape | 1.2.2 | SVG→AI/EPS/PDF 矢量输出 |
+| Potrace | 1.16 | SVG→DXF 描摹 |
+
+**Python 依赖**（完整清单见 `requirements.txt`，含版本下限）
+
+| 类别 | 依赖（实测版本） |
+|------|------------------|
+| 图像处理 | Pillow 12.3.0、numpy 2.3.5、opencv-python-headless 5.0.0.93 |
+| PDF 处理 | PyMuPDF 1.28.2 |
+| 文档生成 | python-docx 1.2.0、openpyxl 3.1.5、python-pptx 1.0.2、reportlab 5.0.1 |
+| OCR | pytesseract 0.3.13、onnxruntime 1.29.0、pyclipper 1.4.0、shapely 2.1.2、jieba 0.42.1、opencc-python-reimplemented 0.1.7 |
+| 证件照抠图 | rembg 2.0.83 |
+| 图片矢量化 | vtracer 0.6.15 |
+| 翻译 | translatepy 2.3 |
+| HTTP 与解析 | requests 2.33.1、beautifulsoup4 4.14.3 |
+
+> Go 侧无第三方依赖，仅标准库。可选增强（缺失自动降级，非必需）：`paddleocr`（版面/表格检测）、`easyocr`（备用 OCR 引擎）。
 
 ### 安装 Tesseract OCR
 
@@ -88,17 +116,26 @@ tesseract --version
 tesseract --list-langs  # 应包含 chi_sim + eng
 ```
 
-### 安装 Python 依赖
+### 一键安装（推荐）
+
+项目提供 `install.sh`，自动完成「系统包 + Python 依赖 + 证件照抠图模型预热」：
 
 ```bash
-pip install pdfminer.six python-docx openpyxl Pillow pymupdf pytesseract pdf2image translatepy beautifulsoup4 python-pptx reportlab
+bash install.sh              # 系统包走 apt（需要 root）
+sudo bash install.sh         # 非 root 时
+SKIP_SYSTEM=1 bash install.sh  # 系统包已装好，只装 Python 依赖
+SKIP_MODELS=1 bash install.sh  # 跳过抠图模型预下载
 ```
 
-或创建 `requirements.txt` 后安装：
+脚本会创建 `.venv` 虚拟环境并安装 `requirements.txt` 全部依赖，启动时通过 `FLOWCONVERT_PYTHON=.venv/bin/python` 指定。
+
+### 手动安装 Python 依赖
 
 ```bash
 pip install -r requirements.txt
 ```
+
+`requirements.txt` 已按实际 import 完整审计（含 rembg、vtracer、python-pptx、reportlab、translatepy、jieba、opencc 等），并标注各依赖的版本下限。
 
 ### 编译运行
 
@@ -286,6 +323,17 @@ LOG_LEVEL=debug go run .
 ```
 
 ## 版本历史
+
+- **v0.1.3** (2026-09) OCR 能力升级与链接翻译
+  - 新增独立 OCR 文字识别页面（`/ocr`）与 `/api/ocr` 接口，双引擎 Tesseract + PP-OCR ONNX（中文准确率更高），支持原版式导出 TXT/Word/Excel/JSON、红框标注、繁简转换
+  - 新增链接翻译 `/api/translate/url`：输入网页 URL 直接提取正文并翻译（SSRF 防护 + 标准库正则正文提取）
+  - 新增试卷模式（`exam=1`）：英语试卷选项答案混淆矩阵、选项头格式规范化、英文词修正
+  - 修复英文图片识别：`detect_orientation` 置信度量纲 bug（0-100 被当成 0-1），横向英文文档不再被误判旋转 90°
+  - 修复英文词修正撇号兼容：OCR 输出的弯撇号 `’`（U+2019）与直撇号 `'`（U+0027）统一匹配，`rt's/lt's → It's` 不再失效
+  - 中文行 CJK 路由：中文为主的行重跑 PP-OCR + jieba 通用纠错，识别率显著提升
+  - 修复视频分段拼接跳帧（逐段归一化重编码）与首段动作循环
+  - 修复证件照人脸检测（YuNet 多尺度重试）与 `mtcnnruntime` 缺失降级
+  - 依赖清单修正：`requirements.txt` 按实际 import 完整审计，新增 `install.sh` 一键安装
 
 - **v0.1.2** (2026-08) 代码审查修复
   - 视频生成参数：JSON 序列化改用 json.Marshal，杜绝引号/换行/控制字符导致的 payload 注入

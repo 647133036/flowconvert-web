@@ -38,6 +38,7 @@ func main() {
 	mux.HandleFunc("/api/convert/idphoto", conv.HandleIdPhoto)
 	mux.HandleFunc("/api/translate", translator.HandleTranslate)
 	mux.HandleFunc("/api/translate/file", translator.HandleTranslateFile)
+	mux.HandleFunc("/api/translate/url", translator.HandleTranslateURL)
 	mux.HandleFunc("/api/ocr", ocr.HandleOcr)
 	mux.HandleFunc("/api/ocr/task/", ocr.HandleOcrTask)
 	mux.HandleFunc("/api/convert/image/text", imageGen.HandleTextImage)

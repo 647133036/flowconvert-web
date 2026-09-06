@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,7 +35,7 @@ func marshalVideoPayload(fields map[string]interface{}) ([]byte, error) {
 	return payload, nil
 }
 
-func MakeTextVideo(tmpDir, prompt string, duration int) (string, error) {
+func MakeTextVideo(tmpDir, prompt, aspectRatio string, duration int) (string, error) {
 	if duration <= 0 {
 		duration = 3
 	}
@@ -42,7 +44,11 @@ func MakeTextVideo(tmpDir, prompt string, duration int) (string, error) {
 	}
 	dest := filepath.Join(tmpDir, "video.mp4")
 	payloadPath := filepath.Join(tmpDir, "video_payload.json")
-	payload, err := marshalVideoPayload(map[string]interface{}{"prompt": prompt, "duration": duration})
+	payload, err := marshalVideoPayload(map[string]interface{}{
+		"prompt":       prompt,
+		"duration":     duration,
+		"aspect_ratio": aspectRatio,
+	})
 	if err != nil {
 		return "", fmt.Errorf("参数序列化失败: %v", err)
 	}
@@ -186,6 +192,12 @@ func splitPromptClauses(prompt string) []string {
 // (cycling when there are more segments than clauses), plus a stage tag. This
 // keeps every segment relevant to what the user wrote while ensuring each one
 // is visibly different.
+//
+// For segments after the first, which are generated in keyframe mode anchored
+// to the previous segment's last frame, the prompt also demands a strict
+// continuation of character, wardrobe, setting and lighting. Without that
+// directive the model re-samples those elements even when a first frame is
+// supplied, which is what made long videos jump between scenes at each seam.
 func segmentStagePrompt(prompt string, i, n int) string {
 	clauses := splitPromptClauses(prompt)
 	var focus string
@@ -203,7 +215,11 @@ func segmentStagePrompt(prompt string, i, n int) string {
 	default:
 		stage = fmt.Sprintf("第%d阶段", i+1)
 	}
-	return fmt.Sprintf("%s。本段聚焦：%s。叙事：%s", prompt, focus, stage)
+	base := fmt.Sprintf("%s。本段聚焦：%s。叙事：%s", prompt, focus, stage)
+	if i == 0 {
+		return base + "。画面以一个明确动作开场并自然推进发展，运镜平稳，避免同一动作反复循环"
+	}
+	return base + "。严格延续上一段画面：保持同一人物、同一服装、同一场景、同一光影与同一色调，动作自然接续并持续推进、避免反复循环，不要重新生成新场景"
 }
 
 // concatVideos merges multiple MP4 segments using ffmpeg concat demuxer.
@@ -228,10 +244,127 @@ func probeResolution(path string) (int, int, error) {
 	return result.Streams[0].Width, result.Streams[0].Height, nil
 }
 
+// probeFPS returns the video stream frame rate from a file, 0 on failure.
+func probeFPS(path string) float64 {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0",
+		"-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", path).CombinedOutput()
+	if err != nil {
+		return 0
+	}
+	s := strings.TrimSpace(string(out))
+	if s == "" || s == "0/0" {
+		return 0
+	}
+	var num, den float64
+	if _, err := fmt.Sscanf(s, "%f/%f", &num, &den); err != nil || den == 0 {
+		return 0
+	}
+	if r := num / den; r >= 1 {
+		return math.Ceil(r)
+	}
+	return 0
+}
+
+// cfrArgs returns the ffmpeg flags for constant-frame-rate output.
+//
+// -fps_mode was introduced in ffmpeg 5.0 and -vsync was removed in 7.0, so
+// neither flag is universally available. Probe the installed version once and
+// pick the spelling the binary actually understands.
+var (
+	cfrArgsOnce sync.Once
+	cfrArgsOut  = []string{"-fps_mode", "cfr"}
+)
+
+func cfrArgs() []string {
+	cfrArgsOnce.Do(func() {
+		out, err := exec.Command("ffmpeg", "-version").Output()
+		if err != nil {
+			return
+		}
+		var major int
+		if _, err := fmt.Sscanf(string(out), "ffmpeg version %d.", &major); err != nil {
+			return
+		}
+		if major < 5 {
+			cfrArgsOut = []string{"-vsync", "cfr"}
+		}
+	})
+	return cfrArgsOut
+}
+
+// concatVideos merges multiple MP4 segments.
+//
+// Segments come from independent generation jobs, so their resolution, frame
+// rate, GOP layout and start PTS all differ. Stream-copying them ("c copy")
+// writes those mismatches straight into the file: a player can only decode
+// from the nearest keyframe, so the junction shows backward-going timestamps
+// and dropped frames. Measured with a 30fps/180-frame and a 24fps/144-frame
+// pair, plain "c copy" produced 15 negative PTS intervals.
+//
+// Normalizing only the concat output is not enough either — the CFR filter
+// drops frames when inputs run at different rates (324 input frames became
+// 290). Normalize each segment first to a common resolution, frame rate and
+// zero-based timestamps, then re-encode the concat. That preserves every
+// frame (360 at 30fps = 12.000s exactly) with no negative PTS.
 func concatVideos(tmpDir string, segPaths []string, dest string) (string, error) {
+	w, h, probeErr := probeResolution(segPaths[0])
+	if probeErr != nil {
+		return "", fmt.Errorf("视频拼接失败: 无法获取分辨率: %v", probeErr)
+	}
+	fps := probeFPS(segPaths[0])
+	if fps == 0 {
+		fps = 30
+	}
+	fpsStr := fmt.Sprintf("%.0f", fps)
+	vf := fmt.Sprintf("scale=%d:%d,setsar=1", w, h)
+
+	normPaths := make([]string, 0, len(segPaths))
+	for i, p := range segPaths {
+		norm := filepath.Join(tmpDir, fmt.Sprintf("norm_%03d.mp4", i))
+		normArgs := append([]string{"-y", "-i", p, "-vf", vf, "-r", fpsStr}, cfrArgs()...)
+		normArgs = append(normArgs,
+			"-c:v", "libx264", "-preset", "fast", "-crf", "23",
+			"-pix_fmt", "yuv420p",
+			"-c:a", "aac",
+			"-start_time", "0", norm)
+		out, err := RunCmdTimeout(5*time.Minute, "ffmpeg", normArgs...)
+		if err != nil {
+			return "", fmt.Errorf("视频分段归一化失败: %s", strings.TrimSpace(out))
+		}
+		normPaths = append(normPaths, norm)
+	}
+
+	listPath, err := writeConcatList(tmpDir, normPaths)
+	if err != nil {
+		return "", err
+	}
+
+	concatArgs := append([]string{"-y", "-fflags", "+genpts",
+		"-f", "concat", "-safe", "0", "-i", listPath,
+		"-vf", vf, "-r", fpsStr}, cfrArgs()...)
+	concatArgs = append(concatArgs,
+		"-c:v", "libx264", "-preset", "fast", "-crf", "23",
+		"-pix_fmt", "yuv420p",
+		"-start_time", "0",
+		"-c:a", "aac",
+		"-movflags", "+faststart", dest)
+	out, err := RunCmdTimeout(10*time.Minute, "ffmpeg", concatArgs...)
+	if err != nil {
+		return "", fmt.Errorf("视频拼接失败: %s", strings.TrimSpace(out))
+	}
+	if _, err := os.Stat(dest); err != nil {
+		return "", fmt.Errorf("拼接输出文件不存在")
+	}
+	return dest, nil
+}
+
+// writeConcatList writes an ffmpeg concat-demuxer list file.
+func writeConcatList(tmpDir string, paths []string) (string, error) {
 	listPath := filepath.Join(tmpDir, "concat_list.txt")
 	var b strings.Builder
-	for _, p := range segPaths {
+	for _, p := range paths {
 		// concat demuxer resolves relative paths against the directory of the
 		// list file, not the process cwd. Use absolute paths to avoid a doubled
 		// path prefix (e.g. data/tmp/vid_x/data/tmp/vid_x/seg.mp4).
@@ -244,33 +377,44 @@ func concatVideos(tmpDir string, segPaths []string, dest string) (string, error)
 	if err := os.WriteFile(listPath, []byte(b.String()), 0o600); err != nil {
 		return "", fmt.Errorf("写入拼接列表失败: %v", err)
 	}
-
-	// Try stream copy first (fastest)
-	out, err := RunCmd("ffmpeg", "-y", "-f", "concat", "-safe", "0",
-		"-i", listPath, "-c", "copy", "-movflags", "+faststart", dest)
-	if err != nil {
-		// Fallback: re-encode with resolution from first segment
-		w, h, probeErr := probeResolution(segPaths[0])
-		if probeErr != nil {
-			return "", fmt.Errorf("视频拼接失败: 无法获取分辨率: %v", probeErr)
-		}
-		out, err = RunCmdTimeout(180*time.Second, "ffmpeg", "-y",
-			"-f", "concat", "-safe", "0", "-i", listPath,
-			"-s", fmt.Sprintf("%dx%d", w, h),
-			"-c:v", "libx264", "-preset", "fast", "-crf", "23",
-			"-c:a", "aac", "-movflags", "+faststart", dest)
-		if err != nil {
-			return "", fmt.Errorf("视频拼接失败: %s", strings.TrimSpace(out))
-		}
-	}
-	if _, err := os.Stat(dest); err != nil {
-		return "", fmt.Errorf("拼接输出文件不存在")
-	}
-	return dest, nil
+	return listPath, nil
 }
 
-// MakeLongTextVideoAI generates a long video by splitting into segments,
-// generating each concurrently via Agnes 2.5 Flash, then concatenating with ffmpeg.
+// extractLastFrameDataURI pulls the final frame of a video into a JPEG data URI
+// for use as the Agnes keyframe first_frame of the following segment. This is
+// what makes consecutive segments share one character, wardrobe and setting:
+// each segment is generated from the picture where the previous one ended.
+func extractLastFrameDataURI(srcPath, tmpDir string, idx int) (string, error) {
+	if srcPath == "" {
+		return "", nil
+	}
+	framePath := filepath.Join(tmpDir, fmt.Sprintf("seg_%03d_lastframe.jpg", idx))
+	out, err := RunCmdTimeout(60*time.Second, "ffmpeg",
+		"-y", "-v", "error", "-sseof", "-0.2", "-i", srcPath,
+		"-frames:v", "1", "-q:v", "3", framePath)
+	if err != nil {
+		return "", fmt.Errorf("提取末帧失败: %s", strings.TrimSpace(out))
+	}
+	if _, err := os.Stat(framePath); err != nil {
+		return "", fmt.Errorf("末帧文件不存在")
+	}
+	dataURI, err := FileToDataURI(framePath)
+	if err != nil {
+		return "", fmt.Errorf("末帧编码失败: %v", err)
+	}
+	return dataURI, nil
+}
+
+// MakeLongTextVideoAI generates a long video by splitting the requested
+// duration into sub-12s segments, generating each via Agnes 2.5 Flash, then
+// concatenating with ffmpeg.
+//
+// Segments are chained rather than generated independently: segment 0 is a
+// plain text generation, and every later segment runs in keyframe mode with
+// segment i-1's last frame as its first frame. Generating each segment from
+// text alone made Agnes re-invent the character's appearance, wardrobe and
+// location on every 10s boundary, which is why the output looked like a hard
+// cut in the middle of one scene.
 func MakeLongTextVideoAI(client *AIClient, tmpDir, prompt string, totalDuration int, aspectRatio string) (string, error) {
 	dest := filepath.Join(tmpDir, "long_video.mp4")
 	if !client.HasAgnes() {
@@ -288,16 +432,31 @@ func MakeLongTextVideoAI(client *AIClient, tmpDir, prompt string, totalDuration 
 
 	for i, segDur := range segs {
 		if i > 0 {
-			time.Sleep(5 * time.Second)
+			time.Sleep(agnesInterSegmentDelay)
 		}
 		segPath := filepath.Join(tmpDir, fmt.Sprintf("seg_%03d.mp4", i))
 
-		err := client.generateVideoSegment(segPath, VideoTaskParams{
+		params := VideoTaskParams{
 			Prompt:      segmentStagePrompt(prompt, i, len(segs)),
-			Mode:        "text",
 			Seconds:     clampSeconds(segDur),
 			AspectRatio: aspectRatio,
-		}, fmt.Sprintf("text-%d", i+1))
+		}
+		if i == 0 {
+			params.Mode = "text"
+		} else {
+			params.Mode = "keyframe"
+			if prev := segPaths[i-1]; prev != "" {
+				if first, frameErr := extractLastFrameDataURI(prev, tmpDir, i-1); frameErr != nil {
+					// Losing the anchor must not kill the whole video: fall back
+					// to a text generation so at least this segment is produced.
+					fmt.Fprintf(os.Stderr, "[LongVideo] 提取第%d段末帧失败，本段退化为文生视频: %v\n", i, frameErr)
+				} else {
+					params.FirstFrame = first
+				}
+			}
+		}
+
+		err := client.generateVideoSegment(segPath, params, fmt.Sprintf("text-%d", i+1))
 		if err != nil {
 			errs[i] = fmt.Errorf("第%d段生成失败: %v", i+1, err)
 			continue
@@ -361,7 +520,7 @@ func MakeLongKeyframeVideoAI(client *AIClient, tmpDir, firstFrameURL, lastFrameU
 
 	for i, segDur := range segs {
 		if i > 0 {
-			time.Sleep(5 * time.Second)
+			time.Sleep(agnesInterSegmentDelay)
 		}
 		segPath := filepath.Join(tmpDir, fmt.Sprintf("kf_seg_%03d.mp4", i))
 
@@ -467,7 +626,7 @@ func MakeLongRefVideoAI(client *AIClient, tmpDir, prompt string, imageURLs []str
 
 	for i, segDur := range segs {
 		if i > 0 {
-			time.Sleep(5 * time.Second)
+			time.Sleep(agnesInterSegmentDelay)
 		}
 		segPath := filepath.Join(tmpDir, fmt.Sprintf("ref_seg_%03d.mp4", i))
 
@@ -593,7 +752,7 @@ func ensurePublicURL(client *AIClient, input, genPrompt string) (string, error) 
 		}
 	}
 	// For localhost/private/unresolvable URLs or data URIs, generate via image API
-	imgURL, _, err := client.GenImageAgnes("agnes-image-2.1-flash", genPrompt, "1K", "16:9", nil)
+	imgURL, _, err := client.GenImageAgnes(agnesImageModel, genPrompt, "1K", "16:9", nil)
 	if err != nil {
 		return "", err
 	}

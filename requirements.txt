@@ -3,7 +3,7 @@
 # 仅列必需项。以下三个为可选增强，未安装时程序自动降级，无需手动安装：
 #   paddleocr   版面/表格检测（缺失时退回启发式表格检测）
 #   easyocr     备用 OCR 引擎（缺失时退回 tesseract / PP-OCR）
-#   mtcnnruntime 证件照人脸检测（PyPI 无此包，缺失时用 OpenCV 级联检测）
+#   mtcnnruntime 证件照人脸检测（PyPI 无此包，缺失时改用 models/face/ 的 YuNet，精度更高）
 #
 # 系统依赖（apt）: ffmpeg poppler-utils tesseract-ocr
 #                 tesseract-ocr-chi-sim tesseract-ocr-eng

@@ -18,15 +18,15 @@ import (
 
 // AIClient manages calls to Agnes and SenseNova AI APIs.
 type AIClient struct {
-	AgnesBaseURL  string
-	AgnesAPIKey   string
-	SenseBaseURL  string
-	SenseAPIKey   string
-	HTTP          *http.Client
+	AgnesBaseURL string
+	AgnesAPIKey  string
+	SenseBaseURL string
+	SenseAPIKey  string
+	HTTP         *http.Client
 	// Rate limiter: max 6 requests per minute for Agnes video API
-	agnesMu      sync.Mutex
-	agnesSince   time.Time
-	agnesCount   int
+	agnesMu    sync.Mutex
+	agnesSince time.Time
+	agnesCount int
 }
 
 // NewAIClient creates an AI client from config values.
@@ -55,8 +55,8 @@ func (c *AIClient) HasSenseNova() bool {
 // imageGenResponse models the JSON returned by /v1/images/generations.
 type imageGenResponse struct {
 	Data []struct {
-		URL       string `json:"url"`
-		B64JSON   string `json:"b64_json"`
+		URL     string `json:"url"`
+		B64JSON string `json:"b64_json"`
 	} `json:"data"`
 	Error *struct {
 		Message string `json:"message"`
@@ -64,9 +64,14 @@ type imageGenResponse struct {
 	} `json:"error"`
 }
 
+// agnesImageModel is the default Agnes text-to-image / image-to-image model.
+const agnesImageModel = "agnes-image-2.5-flash"
+
 // GenImageAgnes calls the Agnes image generation API.
-// model: "agnes-image-2.1-flash" (text-to-image / image-to-image)
-//         "agnes-image-2.0-flash" (image editing / multi-image composition)
+// model: agnesImageModel (text-to-image / image-to-image)
+//
+//	"agnes-image-2.0-flash" (image editing / multi-image composition)
+//
 // size: "1K", "2K", "3K", "4K"
 // ratio: "1:1", "16:9", "9:16", "4:3", "3:4", "2:3", "3:2"
 // images: optional input image URLs or data URIs for img2img / composition
@@ -108,9 +113,9 @@ func (c *AIClient) GenImageAgnes(model, prompt, size, ratio string, images []str
 // model: "sensenova-u1.5-lite"
 func (c *AIClient) GenImageSenseNova(model, prompt, size, ratio string, images []string) (imgURL string, b64 string, err error) {
 	body := map[string]interface{}{
-		"model":      model,
-		"prompt":     prompt,
-		"watermark":  false,
+		"model":     model,
+		"prompt":    prompt,
+		"watermark": false,
 	}
 	if size != "" {
 		body["size"] = size
@@ -228,6 +233,11 @@ type VideoTaskParams struct {
 	Images      []string // URLs for reference mode (max 5)
 }
 
+// agnesInterSegmentDelay spaces submissions apart so a multi-segment video
+// stays inside the Agnes 6-requests-per-minute window instead of tripping it
+// and burning the whole job on 429 retries.
+const agnesInterSegmentDelay = 12 * time.Second
+
 // acquireAgnesToken implements a token bucket rate limiter for Agnes API.
 // Allows max 6 requests per minute.
 func (c *AIClient) acquireAgnesToken() {
@@ -252,6 +262,16 @@ func (c *AIClient) acquireAgnesToken() {
 		}
 	}
 	c.agnesCount++
+}
+
+// resetAgnesTokenBucket re-syncs the local bucket after the server told us we
+// are over quota. The local count can lag the server's own window, so trusting
+// it after a 429 leads to an endless 429 loop.
+func (c *AIClient) resetAgnesTokenBucket() {
+	c.agnesMu.Lock()
+	c.agnesCount = 0
+	c.agnesSince = time.Now()
+	c.agnesMu.Unlock()
 }
 
 // CreateVideoTask submits a video generation task to Agnes Video 2.5 Flash.
@@ -305,14 +325,15 @@ func (c *AIClient) CreateVideoTask(p VideoTaskParams) (string, error) {
 			time.Sleep(backoff)
 			continue
 		}
-		// Check for 429 rate limit
+		// Check for 429 rate limit. Wait out a full quota window and re-sync
+		// the local bucket; a sub-minute backoff fires again into the same
+		// window and burns all retries before any of them can succeed.
 		if strings.Contains(errStr, "429") || strings.Contains(errStr, "rate_limit") || strings.Contains(errStr, "rate limit") {
-			backoff := time.Duration(30*(attempt+1)) * time.Second
-			if backoff > 2*time.Minute {
-				backoff = 2 * time.Minute
+			if attempt+1 < maxRetries {
+				fmt.Fprintf(os.Stderr, "[Agnes] 429 rate limited, retry %d/%d after %v\n", attempt+1, maxRetries, time.Minute)
+				c.resetAgnesTokenBucket()
+				time.Sleep(time.Minute)
 			}
-			fmt.Fprintf(os.Stderr, "[Agnes] 429 rate limited, retry %d/%d after %v\n", attempt+1, maxRetries, backoff)
-			time.Sleep(backoff)
 			continue
 		}
 		break
@@ -393,11 +414,17 @@ func (c *AIClient) PollVideoTask(videoID string, timeout time.Duration) (string,
 
 // segmentAttempts is the number of times a single video segment is retried
 // when the upstream generator fails transiently (e.g. "DiffGenerator
-// returned no result") or the API rate-limits/queues us.
-const segmentAttempts = 3
+// returned no result", upstream "upload failed") or the API rate-limits/queues us.
+const segmentAttempts = 4
+
+// segmentRetryDelay gives the upstream render farm time to recover between
+// attempts of the same segment.
+const segmentRetryDelay = 10 * time.Second
 
 // isTransientVideoErr reports whether a segment generation error is worth
-// retrying. DiffGenerator returning no result and 429/503 are transient.
+// retrying. DiffGenerator returning no result, upstream "upload failed"
+// (observed when Agnes accepts a task but the render farm loses it), plain
+// transport EOFs, and 429/503 back-pressure are all transient.
 func isTransientVideoErr(err error) bool {
 	if err == nil {
 		return false
@@ -405,6 +432,8 @@ func isTransientVideoErr(err error) bool {
 	s := err.Error()
 	return strings.Contains(s, "DiffGenerator returned no result") ||
 		strings.Contains(s, "no result") ||
+		strings.Contains(s, "upload failed") ||
+		strings.Contains(s, "EOF") ||
 		strings.Contains(s, "429") ||
 		strings.Contains(s, "rate_limit") ||
 		strings.Contains(s, "rate limit") ||
@@ -420,7 +449,7 @@ func (c *AIClient) generateVideoSegment(segPath string, params VideoTaskParams, 
 	for attempt := 0; attempt < segmentAttempts; attempt++ {
 		if attempt > 0 {
 			fmt.Fprintf(os.Stderr, "[Agnes] 段%s第%d次重试\n", label, attempt+1)
-			time.Sleep(5 * time.Second)
+			time.Sleep(segmentRetryDelay)
 		}
 		videoID, err := c.CreateVideoTask(params)
 		if err != nil {
