@@ -1,7 +1,9 @@
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
+use std::sync::LazyLock;
 
 use futures_util::stream::StreamExt;
+use regex::Regex;
 use reqwest::Client;
 
 use super::aiclient::validate_download_url;
@@ -237,6 +239,131 @@ pub async fn fetch_doc(
     let tmp_path = Path::new(tmp_dir).join(tmp_name);
     std::fs::write(&tmp_path, &data).map_err(|e| format!("保存失败: {}", e))?;
     Ok((tmp_path.to_string_lossy().to_string(), ext))
+}
+
+/// Download a web page as text for link translation, with SSRF and size protections.
+/// Mirrors Go service.FetchWebPage.
+pub async fn fetch_web_page(raw_url: &str, max_bytes: u64) -> Result<String, String> {
+    if raw_url.is_empty() {
+        return Err("无效或不允许访问的 URL".to_string());
+    }
+    let parsed = raw_url
+        .parse::<reqwest::Url>()
+        .map_err(|_| "无效或不允许访问的 URL".to_string())?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("无效或不允许访问的 URL".to_string());
+    }
+    validate_download_url(raw_url)?;
+
+    let host = parsed.host_str().ok_or("URL 缺少 host")?.to_string();
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let pre_resolved: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|_| "DNS 解析失败".to_string())?
+        .collect();
+
+    if pre_resolved.is_empty() {
+        return Err("DNS 解析无结果".to_string());
+    }
+    if !pre_resolved.iter().any(|sa| is_safe_public_ip(sa.ip())) {
+        return Err("禁止访问内网/回环地址资源".to_string());
+    }
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| format!("下载失败: {}", e))?;
+
+    let resp = client
+        .get(raw_url)
+        .send()
+        .await
+        .map_err(|e| format!("下载失败: {}", e))?;
+    if resp.status() != 200 {
+        return Err(format!("下载失败: HTTP {}", resp.status()));
+    }
+    if let Some(remote) = resp.remote_addr() {
+        if !pre_resolved.iter().any(|sa| sa.ip() == remote.ip()) {
+            return Err("DNS 重绑定防护：连接 IP 与预解析地址不符，请求已拒绝".to_string());
+        }
+    }
+
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let ct = content_type.split(';').next().unwrap_or("").trim().to_lowercase();
+    if !ct.is_empty() && !is_web_content_type(&ct) {
+        return Err("URL 内容不是网页".to_string());
+    }
+
+    let limit = if max_bytes > 0 {
+        max_bytes
+    } else {
+        5 * 1024 * 1024
+    };
+    let mut reader = resp.bytes_stream();
+    let mut data = Vec::new();
+    let mut total = 0u64;
+    while let Some(chunk) = reader.next().await {
+        let chunk = chunk.map_err(|e| format!("下载失败: {}", e))?;
+        if total + chunk.len() as u64 > limit + 1 {
+            return Err("网页内容过大".to_string());
+        }
+        data.extend_from_slice(&chunk);
+        total += chunk.len() as u64;
+    }
+    if total > limit {
+        return Err("网页内容过大".to_string());
+    }
+
+    String::from_utf8(data).map_err(|_| "网页编码异常".to_string())
+}
+
+fn is_web_content_type(ct: &str) -> bool {
+    ct == "text/html"
+        || ct == "text/plain"
+        || ct == "application/xhtml+xml"
+        || ct == "application/xml"
+}
+
+static RE_SCRIPT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap());
+static RE_STYLE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap());
+static RE_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
+static RE_BR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<br\s*/?>").unwrap());
+static RE_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?is)</?(p|div|h[1-6]|li|tr|td|th|section|article|header|footer|ul|ol|table|blockquote|pre)[^>]*>",
+    )
+    .unwrap()
+});
+static RE_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<[^>]+>").unwrap());
+static RE_SPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[ \t]+").unwrap());
+
+/// Heuristic HTML-to-text conversion for link translation input.
+/// Mirrors Go service.ExtractWebText.
+pub fn extract_web_text(page: &str) -> String {
+    let mut s = RE_SCRIPT.replace_all(page, "").into_owned();
+    s = RE_STYLE.replace_all(&s, "").into_owned();
+    s = RE_COMMENT.replace_all(&s, "").into_owned();
+    s = RE_BR.replace_all(&s, "\n").into_owned();
+    s = RE_BLOCK.replace_all(&s, "\n").into_owned();
+    s = RE_TAG.replace_all(&s, "").into_owned();
+    s = html_escape::decode_html_entities(&s).into_owned();
+
+    let mut out: Vec<String> = Vec::new();
+    for line in s.lines() {
+        let line = RE_SPACE.replace_all(line, " ").trim().to_string();
+        if !line.is_empty() {
+            out.push(line);
+        }
+    }
+    out.join("\n")
 }
 
 #[cfg(test)]

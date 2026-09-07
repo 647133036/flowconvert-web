@@ -93,6 +93,10 @@ pub async fn main_inner() {
             axum::routing::post(translate::handle_translate_file),
         )
         .route(
+            "/api/translate/url",
+            axum::routing::post(translate::handle_translate_url),
+        )
+        .route(
             "/api/convert/image/text",
             axum::routing::post(imagegen::handle_text_image),
         )

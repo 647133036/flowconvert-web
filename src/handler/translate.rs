@@ -15,6 +15,13 @@ pub struct TranslateForm {
     pub target: String,
 }
 
+#[derive(Deserialize)]
+pub struct TranslateUrlForm {
+    pub url: String,
+    pub source: String,
+    pub target: String,
+}
+
 const LANGUAGES: &[&str] = &[
     "auto", "zh", "en", "ja", "ko", "fr", "de", "es", "ru", "pt",
     "it", "nl", "pl", "tr", "vi", "th", "ar", "hi", "id", "ms",
@@ -233,6 +240,104 @@ pub async fn handle_translate_file(
         "download_url": dl_url,
         "original_name": fname,
         "output_name": format!("translated.{}", ext),
+    }))).into_response()
+}
+
+pub async fn handle_translate_url(
+    State(app): State<AppState>,
+    AxumJson(form): AxumJson<TranslateUrlForm>,
+) -> impl IntoResponse {
+    let cfg = &app.config;
+
+    let url = form.url.trim().to_string();
+    if url.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "success": false,
+            "error": "请输入要翻译的网页链接"
+        }))).into_response();
+    }
+
+    let source = form.source.to_lowercase();
+    let source = if LANGUAGES.contains(&source.as_str()) {
+        source
+    } else {
+        "auto".to_string()
+    };
+    let target = form.target.to_lowercase();
+    let target = if LANGUAGES.contains(&target.as_str()) && target != "auto" {
+        target
+    } else {
+        "zh".to_string()
+    };
+
+    let page = match service::fetch_web_page(&url, 5 * 1024 * 1024).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("网页抓取失败: {}", e);
+            let (status, msg) = if e.contains("无效")
+                || e.contains("不允许")
+                || e.contains("不是网页")
+            {
+                (StatusCode::BAD_REQUEST, "无效或不允许访问的链接".to_string())
+            } else if e.contains("过大") {
+                (StatusCode::BAD_REQUEST, "网页内容过大".to_string())
+            } else {
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "网页抓取失败，请稍后重试".to_string(),
+                )
+            };
+            return (status, Json(serde_json::json!({
+                "success": false,
+                "error": msg
+            }))).into_response();
+        }
+    };
+
+    let mut text = service::extract_web_text(&page);
+    if text.trim().is_empty() {
+        return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({
+            "success": false,
+            "error": "未能从网页提取到可翻译的文本"
+        }))).into_response();
+    }
+    if text.chars().count() > MAX_TEXT_LEN {
+        text = text.chars().take(MAX_TEXT_LEN).collect();
+    }
+    let source_text = text.clone();
+
+    let tmp_dir = cfg.tmp_dir.join(format!("translate_url_{}", new_id(8)));
+    std::fs::create_dir_all(&tmp_dir).ok();
+
+    let result = match tokio::task::spawn_blocking(move || {
+        service::translate_text(&text, &source, &target)
+    })
+    .await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            tracing::error!("翻译失败: {}", e);
+            return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({
+                "success": false,
+                "error": "翻译失败，请稍后重试"
+            }))).into_response();
+        }
+        Err(e) => {
+            tracing::error!("翻译任务失败: {}", e);
+            return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({
+                "success": false,
+                "error": "翻译失败，请稍后重试"
+            }))).into_response();
+        }
+    };
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "success": true,
+        "translated_text": result.text,
+        "detected_language": result.detected,
+        "engine": result.engine,
+        "source_text": source_text,
     }))).into_response()
 }
 

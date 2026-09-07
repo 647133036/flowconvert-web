@@ -510,12 +510,14 @@ dependencies = [
  "base64",
  "crc32fast",
  "futures-util",
+ "html-escape",
  "http-body-util",
  "image",
  "include_dir",
  "mime_guess",
  "pdf-inspector",
  "percent-encoding",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -659,6 +661,12 @@ checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "html-escape"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9356095b4b41197bba32173600e1582792cda618f65d12f68e2e77d273413c5"
 
 [[package]]
 name = "http"
