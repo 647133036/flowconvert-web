@@ -119,6 +119,7 @@ fn parse_options(fields: &HashMap<String, Vec<String>>) -> OcrOptions {
         redbox: is_true(&get("redbox")),
         optimize: is_true(&get("optimize")),
         translate: is_true(&get("translate")),
+        exam: is_true(&get("exam")),
         formats,
     }
 }

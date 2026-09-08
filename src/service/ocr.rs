@@ -15,6 +15,7 @@ pub struct OcrOptions {
     pub redbox: bool,
     pub optimize: bool,
     pub translate: bool,
+    pub exam: bool,
     pub formats: Vec<String>,
 }
 
