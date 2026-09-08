@@ -3,7 +3,7 @@
 [![Go Version](https://img.shields.io/badge/go-1.25-blue.svg)](https://golang.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache--3.0-green.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.1.4-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/version-v0.1.5-brightgreen.svg)](#)
 
 文档与媒体转换服务。Go 与 Rust 双实现共用同一套 Python 脚本；内置 OCR，扫描件/照片式 PDF 可识别并按原版式导出。
 
@@ -279,7 +279,7 @@ flowconvert/
 ├── main.go                 Go 入口与路由
 ├── middleware.go           CORS / 限流 / 安全头
 ├── go.mod                  Go 模块（无版本字段，发布版本以 Cargo.toml 为准）
-├── Cargo.toml              Rust crate，当前 version = 0.1.4
+├── Cargo.toml              Rust crate，当前 version = 0.1.5
 ├── src/                    Rust 实现
 │   ├── main.rs / lib.rs
 │   ├── handler/            HTTP 处理器（含 ocr.rs exam 字段）
@@ -374,6 +374,10 @@ cargo run
 ```
 
 ## 版本历史
+
+- **v0.1.5** (2026-09) 证件照增加黄色背景
+  - 背景颜色新增「黄色」（`#FFCC00`），前后端 `BACKGROUNDS` 与页面选项对齐
+  - 颜色选项行距加大，第二行文字不再挡住第一行标签
 
 - **v0.1.4** (2026-09) PP-OCRv6 主路线 + 试卷后处理 + Rust exam 贯通
   - 识别模型：PP-OCR rec 默认切换到 `models/ocr/v6_rec.onnx`，字典 `ppocr_keys_v6.txt`（18708 键，含 Unicode 罗马数字）。无内嵌字符表时按 rec 输出通道选 v6 / v1 字典。中文行、中英混合行、低分辨率英文选项块走 v6；高分辨率纯英文仍走 Tesseract。不回退 v4 作为中文主路线。
