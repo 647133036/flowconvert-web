@@ -21,10 +21,15 @@ type UserFacingError struct{ Msg string }
 
 func (e *UserFacingError) Error() string { return e.Msg }
 
-// MakeIdPhoto generates an ID photo from a source image.
-func MakeIdPhoto(tmpDir, src, size, bgColor string) (string, error) {
-	dest := filepath.Join(tmpDir, "idphoto.png")
-	out, err := RunCmdTimeout(idphotoTimeout, PythonPath(), ScriptPath("idphoto.py"), src, dest, size, bgColor)
+// MakeIdPhoto generates an ID photo from a source image. hiRes=true outputs at
+// 600DPI (4x pixels) for online upload / high-quality printing.
+func MakeIdPhoto(tmpDir, src, size, bgColor string, hiRes bool) (string, error) {
+	hiresArg := "0"
+	if hiRes {
+		hiresArg = "1"
+	}
+	dest := filepath.Join(tmpDir, "idphoto.jpg")
+	out, err := RunCmdTimeout(idphotoTimeout, PythonPath(), ScriptPath("idphoto.py"), src, dest, size, bgColor, hiresArg)
 	if err != nil {
 		if msg := pythonErrorMsg(out); msg != "" {
 			return "", &UserFacingError{Msg: msg}

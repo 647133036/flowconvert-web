@@ -31,6 +31,7 @@ SIZES = {
     "二寸": (35, 49),
     "大二寸": (40, 50),
     "美签": (51, 51),
+    "身份证": (30.3, 37.3),
     "小三寸": (35, 45),
     "三寸": (55, 84),
     "社保": (32, 36),
@@ -60,8 +61,8 @@ HEAD_HEIGHT_RATIO = 0.45  # 人脸中心距裁剪框顶部的比例
 HEAD_TOP_RANGE = (0.12, 0.1)  # 头顶距照片顶部的范围 (max, min)
 
 
-def mm_to_px(mm):
-    return max(1, int(round(mm * PX_PER_MM)))
+def mm_to_px(mm, px_per_mm=PX_PER_MM):
+    return max(1, int(round(mm * px_per_mm)))
 
 
 def remove_background(pil_img):
@@ -72,17 +73,45 @@ def remove_background(pil_img):
     模型首次使用自动下载到 ~/.rembg/models/ 并缓存（约 170MB）。
     sess_opts 用 ORT_ENABLE_BASIC：跳过全图优化，模型加载从 ~17s 降到亚秒级，
     否则每个请求新建进程加载 170MB 模型会卡 ~36s，页面看起来就像没有响应。
+
+    额外开启 alpha matting（精修半透明发丝）+ decontaminate（去除发丝边缘
+    渗进来的旧背景色）：换底色时毛发边缘能随新底色正确换色、无白边/残影。
+    matting 不可用或把人物侵蚀到几乎为空时，回退普通后处理，保证人物不丢。
     """
     import onnxruntime as ort
     from rembg import remove, new_session
     opts = ort.SessionOptions()
-    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    # 兼容新旧 onnxruntime：旧版顶层 ORT_ENABLE_BASIC，新版移到 GraphOptimizationLevel
+    _basic = getattr(ort, "ORT_ENABLE_BASIC", None)
+    if _basic is None:
+        _basic = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    opts.graph_optimization_level = _basic
     opts.log_severity_level = 3  # ERROR，抑制加载告警
     session = new_session(model_name="u2net_human_seg", sess_opts=opts)
-    result = remove(pil_img, session=session)
-    if isinstance(result, (bytes, bytearray)):
-        return Image.open(io.BytesIO(result)).convert("RGBA")
-    return result.convert("RGBA")
+
+    def _to_rgba(res):
+        if isinstance(res, (bytes, bytearray)):
+            return Image.open(io.BytesIO(res)).convert("RGBA")
+        return res.convert("RGBA")
+
+    try:
+        result = _to_rgba(remove(
+            pil_img,
+            session=session,
+            alpha_matting=True,
+            alpha_matting_foreground_threshold=240,
+            alpha_matting_background_threshold=10,
+            alpha_matting_erode_size=8,
+            decontaminate=True,
+            post_process_mask=True,
+        ))
+        # matting 过度侵蚀保护：人物有效区域低于 3% 视为失败，回退普通后处理
+        a = np.asarray(result.getchannel("A"))
+        if float((a > 127).mean()) < 0.03:
+            result = _to_rgba(remove(pil_img, session=session, post_process_mask=True))
+        return result
+    except Exception:  # noqa: BLE001  matting 依赖缺失/异常 → 普通后处理兜底
+        return _to_rgba(remove(pil_img, session=session, post_process_mask=True))
 
 
 class FaceDetector:
@@ -404,6 +433,20 @@ def standard_photo_resize(input_image, size):
     return result_image
 
 
+def _feather_alpha(bgra, ksize=5):
+    """对 alpha 通道做轻微高斯羽化，平滑发丝/轮廓的硬过渡与锯齿。
+
+    对齐"图像生成页换背景"(compose_bg.py) 对 alpha 的 GaussianBlur 处理：
+    发丝是半透明边缘，未羽化时缩放后易出现灰边/白边/毛糙；小核(5)在高分辨率
+    裁剪图上仅软化 2~3 像素，人物内部 alpha=255 区基本不变。ksize<2 原样返回。
+    """
+    if ksize < 2:
+        return bgra
+    b, g, r, a = cv2.split(bgra)
+    a = cv2.GaussianBlur(a, (ksize, ksize), 0)
+    return cv2.merge([b, g, r, a])
+
+
 def add_background(bgra, rgb):
     """将透明人像合成到纯色背景（参照 hivision/utils.py add_background pure_color）"""
     b, g, r, a = cv2.split(bgra)
@@ -417,24 +460,30 @@ def add_background(bgra, rgb):
     return output.astype(np.uint8)
 
 
-def make_idphoto(image_path, out_path, size_key="大一寸", bg_key="白色"):
-    """生成证件照主函数（入口签名与 Go 后端保持一致）"""
+def make_idphoto(image_path, out_path, size_key="大一寸", bg_key="白色", hi_res=False):
+    """生成证件照主函数（入口签名与 Go 后端保持一致）。
+
+    hi_res=True 时按 600DPI 出图（像素为普通档 4 倍），适合线上上传/冲印；
+    普通档 300DPI 是国标打印分辨率。
+    """
     if size_key not in SIZES:
         size_key = "一寸"
     if bg_key not in BACKGROUNDS:
         bg_key = "白色"
 
+    out_dpi = DPI * 2 if hi_res else DPI
+    ppmm = out_dpi / 25.4
     mm_w, mm_h = SIZES[size_key]
-    tw, th = mm_to_px(mm_w), mm_to_px(mm_h)
+    tw, th = mm_to_px(mm_w, ppmm), mm_to_px(mm_h, ppmm)
     bg_rgb = BACKGROUNDS[bg_key]
 
     with Image.open(image_path) as pil:
         pil = ImageOps.exif_transpose(pil)
         pil = pil.convert("RGB")
-        # rembg 内部固定按 320x320 推理，输入超过 1280 不会提升抠图质量，
-        # 只会放大数组占用（2000px 时进程峰值内存翻倍以上，内存吃紧时会拖慢到 60s+）。
-        # 按目标尺寸留 2 倍裁剪余量，最小 1280 保证 YuNet 检测精度。
-        max_dim = min(2000, max(1280, max(tw, th) * 2))
+        # u2net 分割本身固定 320x320 推理；但 alpha matting / decontaminate 在
+        # 「输入分辨率」上精修发丝，输入越大发丝边缘越干净（对齐图像生成页换背景，
+        # 后者用原图不降采样）。故把下限提到 1600、上限 2000，既保留发丝细节又控内存。
+        max_dim = min(2000, max(1600, max(tw, th) * 2))
         if pil.width > max_dim or pil.height > max_dim:
             s = max_dim / max(pil.width, pil.height)
             pil = pil.resize((int(pil.width * s), int(pil.height * s)), Image.LANCZOS)
@@ -445,29 +494,37 @@ def make_idphoto(image_path, out_path, size_key="大一寸", bg_key="白色"):
     rgba_np = np.array(rgba)  # HxWx4 (R,G,B,A)
     bgra = np.concatenate([rgba_np[:, :, 2:3], rgba_np[:, :, 1:2], rgba_np[:, :, 0:1], rgba_np[:, :, 3:4]], axis=2)
 
+    # 人像覆盖率检查：u2net_human_seg 未能分离出人物时提前给友好提示，
+    # 避免后续 get_box 在空轮廓上崩溃（max() 空序列）。
+    if float((rgba_np[:, :, 3] > 127).mean()) < 0.02:
+        return {"error": "未能从图片中分离出人像，请换一张人物清晰、背景简洁的照片重试"}
+
     # 2. 人脸检测（MTCNN 或 YuNet，对原图 RGB 转 BGR 进行）
     origin_bgr = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
     face_rect = detect_face(origin_bgr)
     if face_rect is None:
         return {"error": "未检测到清晰人脸，请换一张正面照重试"}
 
-    # 3-4. 裁剪与修正
+    # 3-4. 裁剪与修正（依赖 alpha 透明通道定位人像版式框，须在换底色之前）
     standard_size = (th, tw)
     result_bgra = adjust_photo(bgra, face_rect, standard_size)
 
-    # 5. 先缩放到标准尺寸（保持 4 通道，与原版管线一致）
-    result_std_bgra = standard_photo_resize(result_bgra, standard_size)
+    # 5. 先换底色：在高分辨率裁剪图上直接合成纯色背景。
+    #    先对 alpha 轻微羽化（对齐换背景管线的边缘处理），平滑发丝半透明边缘，
+    #    再与纯色按 alpha 混合；避免"先缩到标准尺寸再合成"在低分辨率下把发丝旧色/白边糊出来。
+    feathered_bgra = _feather_alpha(result_bgra, ksize=5)
+    composited_bgr = add_background(feathered_bgra, bg_rgb)
 
-    # 6. 渲染背景
-    out_img_bgr = add_background(result_std_bgra, bg_rgb)
+    # 6. 再缩放到标准尺寸（此时头发已换好色，与背景作为整体一起降采样，边缘更干净）
+    out_img_bgr = standard_photo_resize(composited_bgr, standard_size)
     out_img = Image.fromarray(cv2.cvtColor(out_img_bgr, cv2.COLOR_BGR2RGB))
     ext = os.path.splitext(out_path)[1].lower()
     if ext in (".jpg", ".jpeg"):
-        out_img.save(out_path, "JPEG", quality=95, dpi=(DPI, DPI))
+        out_img.save(out_path, "JPEG", quality=95, dpi=(out_dpi, out_dpi))
     else:
-        out_img.save(out_path, dpi=(DPI, DPI))
+        out_img.save(out_path, dpi=(out_dpi, out_dpi))
 
-    return {"size": size_key, "bg": bg_key, "w": tw, "h": th, "mm_w": mm_w, "mm_h": mm_h, "dpi": DPI}
+    return {"size": size_key, "bg": bg_key, "w": tw, "h": th, "mm_w": mm_w, "mm_h": mm_h, "dpi": out_dpi, "hi_res": hi_res}
 
 
 if __name__ == "__main__":
@@ -475,5 +532,6 @@ if __name__ == "__main__":
     out_path = sys.argv[2]
     size_key = sys.argv[3] if len(sys.argv) > 3 else "一寸"
     bg_key = sys.argv[4] if len(sys.argv) > 4 else "白色"
-    info = make_idphoto(image_path, out_path, size_key, bg_key)
+    hi_res = sys.argv[5].lower() in ("1", "true", "yes") if len(sys.argv) > 5 else False
+    info = make_idphoto(image_path, out_path, size_key, bg_key, hi_res)
     print(json.dumps(info, ensure_ascii=False))

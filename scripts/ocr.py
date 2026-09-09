@@ -523,6 +523,8 @@ _EXAM_ENGLISH_FIXES = (
     (r"mary\s+me\s+bus", "Mary ___ the bus"),
     # 括号中文注释被 tesseract 吞字（patients(人) → patients(病人)）
     (r"patients\(人\)", "patients(病人)"),
+    # 左引号 " 被误读为 *（says*No → says "No）
+    (r"(\w)\*(?=[A-Z])", r'\1 "'),
 )
 
 
@@ -540,6 +542,8 @@ def _fix_exam_english(text):
         out = re.sub(pat, good, out)
     # 表格题号与英文词粘连（28morning），把数字与后续字母拆开
     out = re.sub(r"(\d)([A-Za-z])", r"\1 \2", out)
+    # 逗号后大写字母缺空格（Yes,Put → Yes, Put）
+    out = re.sub(r",([A-Z])", r", \1", out)
     # 破折号 — 被 tesseract 读成中文「一」，仅在后跟大写字母时还原
     out = re.sub(r"一(?=[A-Z])", "—", out)
     return out
@@ -584,6 +588,23 @@ def _normalize_options(text, conf):
     return out
 
 
+def _fix_option_spacing(text):
+    """选项字母后补空格/修复分隔符（仅 exam 模式）。
+
+    处理以下 OCR 误读：
+    - A.Drink -> A. Drink（选项字母+点号+大写/数字，缺空格）
+    - C4. -> C. 4.（选项字母+数字，缺了点号）
+    - A-Peter -> A. Peter（连字符误读为点号）
+    """
+    if not _EXAM_MODE or not text:
+        return text
+    out = text
+    out = re.sub(r"(?:^|\s)([A-D])-([A-Za-z0-9])", r"\1. \2", out)
+    out = re.sub(r"(?:^|\s)([A-D])(\d)", r"\1. \2", out)
+    out = re.sub(r"(?:^|\s)([A-D])\.([A-Z0-9])", r"\1. \2", out)
+    return out
+
+
 def finalize_line_text(text, conf=None):
     """行的文本后处理入口：英文纠错 → 选项混淆矩阵 → 选项规范化 → 词级纠错 → 中文修复。
 
@@ -599,6 +620,8 @@ def finalize_line_text(text, conf=None):
     if _EXAM_MODE:
         text = _repair_option_block(text)
     text = _normalize_options(text, conf)
+    if _EXAM_MODE:
+        text = _fix_option_spacing(text)
     text = _correct_english_words(text)
     text = _recover_english_spaces(text)
     text = _fix_exam_english(text)
@@ -2936,8 +2959,11 @@ def run(src, opts, outdir):
         header_cache.extend(running)
 
     raw_text = "\n\n".join(b.text for b in all_blocks if b.text.strip())
-    text = converter.convert(raw_text) if raw_text else ""
     detected = charset if charset != "auto" else detect_charset(raw_text)
+    if detected != "auto":
+        converter.target = detected
+        converter._cc = None
+    text = converter.convert(raw_text) if raw_text else ""
 
     translated = ""
     if do_translate and text:

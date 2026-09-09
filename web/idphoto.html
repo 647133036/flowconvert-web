@@ -72,6 +72,7 @@
           <button class="size-btn" data-size="二寸">二寸<span class="size-mm">35×49mm</span></button>
           <button class="size-btn" data-size="大二寸">大二寸<span class="size-mm">40×50mm</span></button>
           <button class="size-btn" data-size="美签">美签<span class="size-mm">51×51mm</span></button>
+          <button class="size-btn" data-size="身份证">身份证<span class="size-mm">30×37mm</span></button>
           <button class="size-btn" data-size="小三寸">小三寸<span class="size-mm">35×45mm</span></button>
           <button class="size-btn" data-size="三寸">三寸<span class="size-mm">55×84mm</span></button>
           <button class="size-btn" data-size="社保">社保<span class="size-mm">32×36mm</span></button>
@@ -115,6 +116,15 @@
           <button class="color-btn" data-color="黄色" style="background:#FFCC00;">
             <span class="color-label">黄色</span>
           </button>
+        </div>
+      </div>
+
+      <!-- 输出规格选择 -->
+      <div class="param-group">
+        <label>📏 输出规格</label>
+        <div class="size-grid" id="qualityGrid">
+          <button class="size-btn active" data-hires="0">标准<span class="size-mm">300DPI · 打印够用</span></button>
+          <button class="size-btn" data-hires="1">高清<span class="size-mm">600DPI · 上传/冲印</span></button>
         </div>
       </div>
 
@@ -166,6 +176,7 @@ const els = {
   placeholder: $('idPlaceholder'),
   sizeGrid: $('sizeGrid'),
   colorGrid: $('colorGrid'),
+  qualityGrid: $('qualityGrid'),
   convertBtn: $('idConvertBtn'),
   status: $('status'),
   statusText: $('statusText'),
@@ -181,6 +192,7 @@ const els = {
 let selectedFile = null;
 let selectedSize = '大一寸';
 let selectedColor = '白色';
+let selectedHiRes = false;
 let isConverting = false;
 
 // ── 拖拽上传 ──
@@ -248,6 +260,15 @@ els.colorGrid.addEventListener('click', (e) => {
   selectedColor = btn.dataset.color;
 });
 
+// ── 输出规格选择 ──
+els.qualityGrid.addEventListener('click', (e) => {
+  const btn = e.target.closest('.size-btn');
+  if (!btn) return;
+  els.qualityGrid.querySelectorAll('.size-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  selectedHiRes = btn.dataset.hires === '1';
+});
+
 // ── 生成 ──
 els.convertBtn.addEventListener('click', async () => {
   if (isConverting || !selectedFile) return;
@@ -261,6 +282,7 @@ els.convertBtn.addEventListener('click', async () => {
     formData.append('file', selectedFile);
     formData.append('size', selectedSize);
     formData.append('bg_color', selectedColor);
+    formData.append('hi_res', selectedHiRes ? '1' : '0');
 
     const resp = await fetch('/api/convert/idphoto', {
       method: 'POST',
@@ -285,10 +307,10 @@ els.convertBtn.addEventListener('click', async () => {
         <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
         <polyline points="22 4 12 14.01 9 11.01"/>
       </svg>`;
-    els.resultText.textContent = `✅ 证件照生成成功！${selectedSize} / ${selectedColor}底`;
+    els.resultText.textContent = `✅ 证件照生成成功！${selectedSize} / ${selectedColor}底${selectedHiRes ? '（高清 600DPI）' : ''}`;
     els.resultPreviewImg.src = blobUrl;
 
-    const filename = `证件照_${selectedSize}_${selectedColor}底.png`;
+    const filename = `证件照_${selectedSize}_${selectedColor}底${selectedHiRes ? '_高清' : ''}.jpg`;
     els.downloadLink.href = blobUrl;
     els.downloadLink.download = filename;
 

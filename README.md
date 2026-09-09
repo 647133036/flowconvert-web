@@ -3,11 +3,40 @@
 [![Go Version](https://img.shields.io/badge/go-1.25-blue.svg)](https://golang.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache--3.0-green.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.1.5-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/version-v0.1.6-brightgreen.svg)](#)
 
 文档与媒体转换服务。Go 与 Rust 双实现共用同一套 Python 脚本；内置 OCR，扫描件/照片式 PDF 可识别并按原版式导出。
 
 当前仓库默认分支为 `rust-rewrite`（Go + Rust 并存）。`main` 仅保留 Go。OCR 识别引擎是 `scripts/ocr.py`，Go / Rust 都通过子进程调用，不在服务端原生化。
+
+## 🆕 v0.1.6 本次更新
+
+**版本号 `v0.1.6`**（在上版 `v0.1.5` 基础上 +0.0.1）。本次为质量加固 + 能力增强 + 全量审查，不改变既有 API 契约。
+
+### 新增 / 改进
+
+| 类别 | 改动 |
+|------|------|
+| 证件照·高清 | 新增「输出规格」选项：标准 300DPI（国标打印）/ 高清 600DPI（像素×4，线上上传/冲印）。前端 `hi_res` 开关贯通 `idphoto.py` → `MakeIdPhoto` → `POST /api/convert/idphoto` |
+| 证件照·发丝 | 发丝换底色对齐「换背景」管线：抠图分辨率下限 1280→1600、先合成纯色再整体缩放、发丝 alpha 高斯羽化（GaussianBlur k5） |
+| 图像编辑·解码 | 修复本地降级编辑只认 PNG 的 bug：`MakeEditedImage` 由 `png.Decode` 改 `image.Decode`（全格式），新增回归测试（PNG/JPEG/GIF/BMP/TIFF + 垃圾字节负例） |
+| 安全·SSRF | `validateDownloadURL` 复用 `isBlockedIP`，补上 CGNAT(100.64/8)/TEST-NET/多播 拦截，与 `fetch.go` 三层防护判据对齐 |
+| 视频·Agnes Python 管线 | `scripts/agnes_video.py`：LLM(agnes-3.0-flash) 分析 → 分段 agnes-video-2.5-flash 生成 → ffmpeg 归一化拼接；首尾帧/参考图自动去水印；handler 先走 Python、失败降级 Go 再降级本地合成 |
+| OCR·试卷后处理 | 选项间距/引号/粘字修复（exam 模式），字符集修正后重建 opencc 转换器 |
+| 测试 | 全量代码/安全审查 + 单元/集成回归：Go `go test ./...`、Rust `cargo test`（85 单测 + 23 集成）全绿 |
+
+### 技术栈
+
+- **双实现服务端**：Go 1.25（稳定，标准库为主）＋ Rust 2021 / axum（并行重写，业务能力对齐）
+- **共用 Python 引擎**：`scripts/*.py` 子进程调用，Go/Rust 不原生化
+  - OCR：Tesseract（主遍）＋ PP-OCR ONNX v6（中文/选项块路由）
+  - 证件照：rembg `u2net_human_seg`（含 alpha matting + decontaminate）
+  - 翻译：translatepy 多引擎（Google/DeepL/TranslateCom/MyMemory，无需 Key）
+  - AI：Agnes 图像 / 视频 / LLM（`agnes-video-2.5-flash`、`agnes-image-2.5-flash`、`agnes-3.0-flash`）
+- **系统依赖**：Tesseract、FFmpeg、Poppler、Inkscape、Potrace
+- **前端**：`web/*.html`（原生 JS，无框架），单页 `index / ocr / translate / video / image / idphoto`
+
+详见下文「OCR 管线」「快速开始」「版本历史」。
 
 ## 功能特性
 
@@ -16,7 +45,7 @@
 | 图片 → 矢量图 | `POST /api/convert/upload` | 支持 JPG/PNG/BMP/TIFF/WebP/GIF，输出 SVG/AI/DXF/EPS |
 | PDF → Office | `POST /api/convert/pdf-to-office` | PDF 转 Word/Excel，无文本层时自动走 OCR |
 | 素描效果 | `POST /api/convert/sketch` | 图片转素描风格 |
-| 证件照 | `POST /api/convert/idphoto` | 一寸/二寸，支持白/蓝/红背景 |
+| 证件照 | `POST /api/convert/idphoto` | 多规格（一寸~六寸/签证/社保等），白/蓝/红/粉/黄等背景，可选 `hi_res` 高清 600DPI 出图 |
 | 文本翻译 | `POST /api/translate` | 自动检测源语言，多引擎 fallback（Google/DeepL/TranslateCom），无需 API Key |
 | 文件翻译 | `POST /api/translate/file` | 文档翻译下载（PDF/Word/Excel/PPT，含 OCR） |
 | 链接翻译 | `POST /api/translate/url` | 输入网页 URL 提取正文并翻译（SSRF 防护） |
@@ -279,7 +308,7 @@ flowconvert/
 ├── main.go                 Go 入口与路由
 ├── middleware.go           CORS / 限流 / 安全头
 ├── go.mod                  Go 模块（无版本字段，发布版本以 Cargo.toml 为准）
-├── Cargo.toml              Rust crate，当前 version = 0.1.5
+├── Cargo.toml              Rust crate，当前 version = 0.1.6
 ├── src/                    Rust 实现
 │   ├── main.rs / lib.rs
 │   ├── handler/            HTTP 处理器（含 ocr.rs exam 字段）
@@ -374,6 +403,14 @@ cargo run
 ```
 
 ## 版本历史
+
+- **v0.1.6** (2026-09) 质量加固 + 能力增强 + 全量审查
+  - 证件照新增「输出规格」：标准 300DPI / 高清 600DPI（像素×4），前端开关贯通后端
+  - 证件照发丝换底色对齐换背景管线（抠图 1600、先合成后缩放、alpha 羽化）
+  - 修复本地图像编辑只认 PNG（`png.Decode`→`image.Decode` 全格式）并补回归测试
+  - SSRF：`validateDownloadURL` 复用 `isBlockedIP`，补 CGNAT/TEST-NET/多播拦截
+  - 新增 Agnes 视频 Python 管线（LLM 分析 + 分段生成 + ffmpeg 拼接 + 去水印）
+  - OCR 试卷后处理与字符集修正；全量代码/安全/单测/集成回归通过
 
 - **v0.1.5** (2026-09) 证件照增加黄色背景
   - 背景颜色新增「黄色」（`#FFCC00`），前后端 `BACKGROUNDS` 与页面选项对齐
