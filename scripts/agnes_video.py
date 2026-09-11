@@ -49,15 +49,21 @@ def log(obj):
 
 # ── Step 1: LLM 分析 ──
 
-SYSTEM_PROMPT = """你是一位 AI 视频生成专家。用户会输入视频内容描述，可能包含人物着装、环境背景、主题或舞名、整体风格、动作要诀等要素，也可能只是一段自由描述。
+SYSTEM_PROMPT = """你是一位 AI 视频生成专家，擅长把用户的动作/舞蹈描述改写成文生视频模型能精确执行的 prompt。用户输入可能包含人物着装、环境背景、主题或舞名、整体风格、动作要诀等要素，也可能只是一段自由描述。
 
 请将其分析、整合、扩写为一段适合 AI 文生视频模型理解的专业 prompt：
 1. 输出一段连贯的中文描述，直接描绘画面与动作
-2. 补充必要的视觉细节：光影、色调、构图、运镜方式
-3. 强调动作的连贯性与节奏推进，避免同一动作反复循环
-4. 保留用户原意与核心要素，不偏离主题
-5. 只输出 prompt 正文，不要解释、不要前后缀、不要引号、不要分点编号
-6. 控制在 180 字以内"""
+2. 动作保真优先：用户对身体部位数量、左右手、姿势的指定必须逐字保留并强化，绝不泛化（例如"单手"绝不能写成或暗示成"双手"）
+3. 抽象动作名必须转写为具体身体描述：说明是哪只手/哪条腿、抬到什么位置、呈什么形状；同时明确其余肢体的状态（如"左手始终自然下垂贴于身侧，不参与动作"），防止模型按常见姿势脑补
+4. 舞蹈/动作类描述按节拍拆解为连续动作序列：起始姿势 → 动作轨迹 → 定格姿势，动作清晰可辨
+5. 补充必要的视觉细节：光影、色调、构图；人物动作/舞蹈类用固定机位中近景，避免运镜干扰动作呈现
+6. 外观与场景必须写成可锁定的具体细节：服装的款式、颜色、扣子/拉链/图案、发型、配饰，以及场景布置、色调——这些细节会被逐段复用贯穿全片，必须具体、唯一、不含糊（不要写"服装整洁"这类无法锁定的泛化描述）
+7. 强调动作的连贯性与节奏推进，避免同一动作反复循环
+8. 保留用户原意与核心要素，不偏离主题
+9. 只输出 prompt 正文，不要解释、不要前后缀、不要引号、不要分点编号
+10. 控制在 220 字以内
+
+示例：用户输入"一个女孩单手比心"，输出类似：一位年轻女孩面向镜头微笑站立，柔和日光，浅色背景，固定机位中近景。她只抬起右手至脸颊右侧，拇指与食指交叉捏合比出一个小巧的心形，保持姿势轻微晃动；左手全程自然下垂贴于身侧，不参与任何动作。画面明亮清新，节奏轻快。"""
 
 
 def agnes_chat(base, key, model, system, user):
@@ -212,23 +218,29 @@ def segment_prompt(prompt, i, n):
 
 KEYFRAME_SYS = """你是 AI 视频导演。我会给你首帧和尾帧两张图片（顺序：首帧在前，尾帧在后），以及用户期望的过渡主题。
 
-请完成两件事：
+请完成三件事：
 1. 判断每张图是否有水印/logo/文字标识，输出 watermark 布尔数组，顺序与输入图一致。
-2. 识别首帧和尾帧的画面内容（人物着装、场景、色调、构图），设计从首帧自然过渡到尾帧的连续叙事，分成 {n} 段：第 1 段以首帧为起点，第 {n} 段以尾帧为收尾，中间段设计自然过渡动作与场景推进，保持人物与色调连贯。
+2. 从首帧提取一份固定外观设定 setting：人物服装的款式、颜色、扣子/拉链/图案、发型、配饰，以及场景布置、色调、光影——必须具体到可逐字锁定（不写"服装整洁"这类泛化描述）。
+3. 识别首帧和尾帧的画面内容（人物着装、场景、色调、构图），设计从首帧自然过渡到尾帧的连续叙事，分成 {n} 段：第 1 段以首帧为起点，第 {n} 段以尾帧为收尾，中间段设计自然过渡动作与场景推进，保持人物与色调连贯。
+
+动作保真：过渡主题中对身体部位数量、左右手、姿势的指定必须逐字保留并强化，绝不泛化（如"单手"不能变成"双手"）；抽象动作名转写为具体身体描述（哪只手、抬到什么位置、呈什么形状），并明确其余肢体状态。
 
 只输出一个 JSON 对象（不要 markdown 代码块、不要解释）：
-{{"watermark":[false,true],"narrative":["第1段画面描述...","第{n}段画面描述..."]}}
-narrative 为 {n} 个元素，每个是一段中文视频画面描述（不超过120字，含动作、运镜、光影、色调）。"""
+{{"watermark":[false,true],"setting":"固定外观设定，60字以内","narrative":["第1段画面描述...","第{n}段画面描述..."]}}
+narrative 为 {n} 个元素，每个是一段中文视频画面描述（不超过120字，含动作、运镜、光影、色调；不要重复 setting 内容，代码会自动拼接）。"""
 
 REF_SYS = """你是 AI 视频导演。我会给你若干参考图，以及用户期望的主题。参考图仅作为视觉内容参考，不逐帧对应。
 
-请完成两件事：
+请完成三件事：
 1. 判断每张图是否有水印/logo/文字标识，输出 watermark 布尔数组，顺序与输入图一致。
-2. 识别每张图的画面内容（人物着装、场景、色调、构图），把参考图内容作为视觉参考，设计 {n} 段连贯视频叙事：第 1 段开场，第 {n} 段收尾，中间段自然推进，整体风格与参考图保持一致。
+2. 从参考图提取一份固定外观设定 setting：人物服装的款式、颜色、扣子/拉链/图案、发型、配饰，以及场景布置、色调、光影——必须具体到可逐字锁定（不写"服装整洁"这类泛化描述）。
+3. 识别每张图的画面内容（人物着装、场景、色调、构图），把参考图内容作为视觉参考，设计 {n} 段连贯视频叙事：第 1 段开场，第 {n} 段收尾，中间段自然推进，整体风格与参考图保持一致。
+
+动作保真：主题描述中对身体部位数量、左右手、姿势的指定必须逐字保留并强化，绝不泛化（如"单手"不能变成"双手"）；抽象动作名转写为具体身体描述（哪只手、抬到什么位置、呈什么形状），并明确其余肢体状态。
 
 只输出一个 JSON 对象（不要 markdown 代码块、不要解释）：
-{{"watermark":[false,false,true],"narrative":["第1段画面描述...","第{n}段画面描述..."]}}
-narrative 为 {n} 个元素，每个是一段中文视频画面描述（不超过120字，含动作、运镜、光影）。"""
+{{"watermark":[false,false,true],"setting":"固定外观设定，60字以内","narrative":["第1段画面描述...","第{n}段画面描述..."]}}
+narrative 为 {n} 个元素，每个是一段中文视频画面描述（不超过120字，含动作、运镜、光影；不要重复 setting 内容，代码会自动拼接）。"""
 
 
 def parse_segment_prompts(text, n):
@@ -257,10 +269,11 @@ def parse_segment_prompts(text, n):
 
 
 def parse_analysis(text, n, m, fallback_prompt):
-    """解析 LLM 组合输出 → (narrative[N], watermark[M])。失败给默认值。"""
+    """解析 LLM 组合输出 → (narrative[N], watermark[M], setting)。失败给默认值。"""
     text = (text or "").strip()
     narrative = None
     watermark = [False] * m
+    setting = ""
     obj = None
     try:
         obj = json.loads(text)
@@ -277,6 +290,9 @@ def parse_analysis(text, n, m, fallback_prompt):
             out = [str(x).strip() for x in narr if str(x).strip()]
             if out:
                 narrative = (out + [out[-1]] * n)[:n]
+        st = obj.get("setting")
+        if isinstance(st, str) and st.strip():
+            setting = st.strip()
         wm = obj.get("watermark")
         if isinstance(wm, list):
             parsed = []
@@ -291,7 +307,7 @@ def parse_analysis(text, n, m, fallback_prompt):
         narrative = parse_segment_prompts(text, n)
     if narrative is None:
         narrative = [fallback_prompt] * n
-    return narrative, watermark
+    return narrative, watermark, setting
 
 
 def _analyze_with_dewater(base, key, chat_model, sys_prompt, user_text, image_urls, n, fallback_prompt):
@@ -308,7 +324,7 @@ def _analyze_with_dewater(base, key, chat_model, sys_prompt, user_text, image_ur
     for du in data_uris:
         content.append({"type": "image_url", "image_url": {"url": du}})
     raw = agnes_chat(base, key, chat_model, sys_prompt, content)
-    narrative, watermark = parse_analysis(raw, n, len(raws), fallback_prompt)
+    narrative, watermark, setting = parse_analysis(raw, n, len(raws), fallback_prompt)
     cleaned = []
     for i, (b, ct) in enumerate(raws):
         has_wm = watermark[i] if i < len(watermark) else False
@@ -318,29 +334,29 @@ def _analyze_with_dewater(base, key, chat_model, sys_prompt, user_text, image_ur
             cleaned.append(cb)
         else:
             cleaned.append(b)
-    return narrative, watermark, [base64.b64encode(c).decode() for c in cleaned]
+    return narrative, watermark, [base64.b64encode(c).decode() for c in cleaned], setting
 
 
 def analyze_keyframe(base, key, chat_model, first_url, last_url, user_prompt, n):
-    """下载首尾帧 → LLM(内容+水印) → 去水印 → 返回 (n段叙事, [首帧b64, 尾帧b64]，有水印的已清洗)。"""
+    """下载首尾帧 → LLM(内容+水印+外观设定) → 去水印 → 返回 (n段叙事, [首帧b64, 尾帧b64], setting)。"""
     images = [first_url, last_url]
     sys_prompt = KEYFRAME_SYS.format(n=n)
     user_text = f"过渡主题/描述：{user_prompt}\n共 2 张图（首帧在前、尾帧在后），请输出 {n} 段叙事并标注每张图是否有水印。"
-    narrative, wm, cleaned_b64 = _analyze_with_dewater(
+    narrative, wm, cleaned_b64, setting = _analyze_with_dewater(
         base, key, chat_model, sys_prompt, user_text, images, n, user_prompt or "自然过渡")
-    log({"stage": "analyzed", "prompts": len(narrative), "watermark": wm, "sample": narrative[0][:120]})
-    return narrative, cleaned_b64
+    log({"stage": "analyzed", "prompts": len(narrative), "watermark": wm, "setting": setting[:60], "sample": narrative[0][:120]})
+    return narrative, cleaned_b64, setting
 
 
 def analyze_ref(base, key, chat_model, image_urls, user_prompt, n):
-    """下载参考图 → LLM(内容+水印) → 去水印 → 返回 (n段叙事, [清洗后b64])，b64 供 reference 模式内容参考。"""
+    """下载参考图 → LLM(内容+水印+外观设定) → 去水印 → 返回 (n段叙事, [清洗后b64], setting)。"""
     m = len(image_urls)
     sys_prompt = REF_SYS.format(n=n)
     user_text = f"主题/描述：{user_prompt}\n共 {m} 张参考图，请输出 {n} 段叙事并标注每张图是否有水印。"
-    narrative, wm, cleaned_b64 = _analyze_with_dewater(
+    narrative, wm, cleaned_b64, setting = _analyze_with_dewater(
         base, key, chat_model, sys_prompt, user_text, image_urls, n, user_prompt or "连贯叙事")
-    log({"stage": "analyzed", "prompts": len(narrative), "watermark": wm, "sample": narrative[0][:120]})
-    return narrative, cleaned_b64
+    log({"stage": "analyzed", "prompts": len(narrative), "watermark": wm, "setting": setting[:60], "sample": narrative[0][:120]})
+    return narrative, cleaned_b64, setting
 
 
 # ── Step 3: Agnes 视频任务 ──
@@ -519,7 +535,7 @@ def main():
     with open(payload_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
 
-    base = os.environ.get("AGNES_BASE_URL", "https://apihub.agnes-ai.com/v1")
+    base = os.environ.get("AGNES_BASE_URL", "https://apihub.agnes-ai.cn/v1")
     key = env_or_die("AGNES_API_KEY")
     chat_model = os.environ.get("AGNES_CHAT_MODEL", AGNES_CHAT_MODEL_DEFAULT)
 
@@ -550,16 +566,17 @@ def main():
     # Step 1: LLM 分析
     kf_clean = []
     ref_clean = []
+    setting = ""
     if mode == "keyframe":
         log({"stage": "analyze", "msg": "正在用 Agnes 3.0 Flash 识别首尾帧 + 设计叙事..."})
         try:
-            seg_prompts, kf_clean = analyze_keyframe(base, key, chat_model, first_url, last_url, user_prompt or "自然过渡", n)
+            seg_prompts, kf_clean, setting = analyze_keyframe(base, key, chat_model, first_url, last_url, user_prompt or "自然过渡", n)
         except RuntimeError as e:
             fail(str(e))
     elif mode == "ref":
         log({"stage": "analyze", "msg": f"正在用 Agnes 3.0 Flash 识别 {len(image_urls)} 张参考图..."})
         try:
-            seg_prompts, ref_clean = analyze_ref(base, key, chat_model, image_urls, user_prompt or "连贯叙事", n)
+            seg_prompts, ref_clean, setting = analyze_ref(base, key, chat_model, image_urls, user_prompt or "连贯叙事", n)
         except RuntimeError as e:
             fail(str(e))
     else:
@@ -574,6 +591,11 @@ def main():
             enhanced = user_prompt
         seg_prompts = [segment_prompt(enhanced, i, n) for i in range(n)]
         log({"stage": "analyzed", "prompt": enhanced[:200]})
+
+    # 外观设定锁定：同一份 setting 逐字拼进每段 prompt，全片复用，
+    # 防止分段之间服装/场景细节漂移（如第一段有扣子、下一段没了）
+    if setting:
+        seg_prompts = [f"{setting}。{p}" for p in seg_prompts]
 
     log({"stage": "split", "segments": n, "durations": segs, "mode": mode})
 

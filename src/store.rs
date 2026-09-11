@@ -97,6 +97,8 @@ pub struct VideoJob {
     pub error: Option<String>,
     pub notice: Option<String>,
     pub created_at: Instant,
+    /// 完成/失败时刻；运行中为 None
+    pub done_at: Option<Instant>,
 }
 
 pub struct VideoJobStore {
@@ -134,6 +136,7 @@ impl VideoJobStore {
             error: None,
             notice: None,
             created_at: Instant::now(),
+            done_at: None,
         };
         self.jobs.lock().unwrap().insert(id.clone(), job.clone());
         job
@@ -161,6 +164,7 @@ impl VideoJobStore {
         if let Some(j) = self.jobs.lock().unwrap().get_mut(id) {
             j.status = JobStatus::Completed;
             j.download_url = Some(url.to_string());
+            j.done_at = Some(Instant::now());
         }
     }
 
@@ -168,6 +172,7 @@ impl VideoJobStore {
         if let Some(j) = self.jobs.lock().unwrap().get_mut(id) {
             j.status = JobStatus::Failed;
             j.error = Some(msg.to_string());
+            j.done_at = Some(Instant::now());
         }
     }
 
@@ -177,9 +182,17 @@ impl VideoJobStore {
         }
     }
 
+    /// 运行中任务的兜底寿命：AI 视频生成可能超过 30 分钟，运行期间
+    /// 不能按创建时间回收；仅当任务异常卡死时超过该时长才清理。
     fn gc(&self) {
-        let cutoff = Instant::now() - self.ttl;
-        self.jobs.lock().unwrap().retain(|_, j| j.created_at >= cutoff);
+        const MAX_VIDEO_JOB_RUN_TIME: Duration = Duration::from_secs(2 * 3600);
+        let now = Instant::now();
+        self.jobs.lock().unwrap().retain(|_, j| match j.done_at {
+            // 已结束：从完成时刻起保留一个 TTL，与文件存储寿命对齐
+            Some(done) => now.duration_since(done) < self.ttl,
+            // 仍在运行：按创建时间给兜底寿命
+            None => now.duration_since(j.created_at) < MAX_VIDEO_JOB_RUN_TIME,
+        });
     }
 }
 
@@ -366,10 +379,21 @@ mod tests {
     async fn test_video_job_gc_clears_expired() {
         let store = VideoJobStore::new(0);
         let job = store.create();
-        // TTL is 0 minutes, so after a brief sleep it should be expired
+        // 运行中任务不受 TTL 回收；结束后 TTL 为 0 应立即过期
+        store.set_error(&job.id, "done");
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         store.gc();
         assert!(store.get(&job.id).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_video_job_gc_keeps_running() {
+        // 运行中任务即使超过 TTL 也不能被回收（长生成任务保护）
+        let store = VideoJobStore::new(0);
+        let job = store.create();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        store.gc();
+        assert!(store.get(&job.id).is_some());
     }
 
     #[tokio::test]

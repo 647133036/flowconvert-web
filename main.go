@@ -24,7 +24,7 @@ func main() {
 	conv := &handler.ConvertH{Cfg: cfg, Store: store}
 	translator := &handler.TranslateH{Cfg: cfg, Store: store}
 	imageGen := &handler.ImageGenH{Cfg: cfg, Store: store, AI: ai}
-	videoGen := &handler.VideoGenH{Cfg: cfg, Store: store, AI: ai, Jobs: handler.NewVideoJobStore(30 * time.Minute)}
+	videoGen := &handler.VideoGenH{Cfg: cfg, Store: store, AI: ai, Jobs: handler.NewVideoJobStore(2 * time.Hour)}
 	ocr := &handler.OcrH{Cfg: cfg, Store: store, Jobs: handler.NewOcrJobStore(30 * time.Minute)}
 
 	mux := http.NewServeMux()

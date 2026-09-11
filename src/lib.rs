@@ -34,7 +34,7 @@ pub async fn main_inner() {
     limiter.spawn_cleanup();
 
     let file_store = FileStore::new(cfg.out_dir.clone(), cfg.ttl_hours as u64);
-    let video_jobs = VideoJobStore::new(60);
+    let video_jobs = VideoJobStore::new(120);
     let ocr_jobs = OcrJobStore::new(30);
 
     let client = if !cfg.agnes_api_key.is_empty() || !cfg.sensenova_key.is_empty() {

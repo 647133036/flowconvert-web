@@ -17,6 +17,7 @@ type VideoJob struct {
 	Error       string    `json:"error,omitempty"`
 	Notice      string    `json:"notice,omitempty"`
 	CreatedAt   time.Time `json:"-"`
+	DoneAt      time.Time `json:"-"` // 完成/失败时刻；运行中为零值
 }
 
 // VideoJobStore holds in-memory video generation jobs and garbage
@@ -86,6 +87,7 @@ func (s *VideoJobStore) SetComplete(id, url string) {
 	if j, ok := s.jobs[id]; ok {
 		j.Status = "completed"
 		j.DownloadURL = url
+		j.DoneAt = time.Now()
 	}
 }
 
@@ -95,6 +97,7 @@ func (s *VideoJobStore) SetError(id, msg string) {
 	if j, ok := s.jobs[id]; ok {
 		j.Status = "failed"
 		j.Error = msg
+		j.DoneAt = time.Now()
 	}
 }
 
@@ -116,12 +119,25 @@ func (s *VideoJobStore) gcLoop() {
 	}
 }
 
+// maxVideoJobRunTime 是运行中任务的兜底寿命：AI 视频生成可能超过 30
+// 分钟，运行期间不能按创建时间回收；仅当任务异常卡死（goroutine 退出
+// 但未置状态）时，超过该时长才被清理。
+const maxVideoJobRunTime = 2 * time.Hour
+
 func (s *VideoJobStore) gc() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cutoff := time.Now().Add(-s.ttl)
+	now := time.Now()
 	for id, j := range s.jobs {
-		if j.CreatedAt.Before(cutoff) {
+		if j.DoneAt.IsZero() {
+			// 仍在运行：按创建时间给兜底寿命，避免长任务生成中途被回收
+			if j.CreatedAt.Before(now.Add(-maxVideoJobRunTime)) {
+				delete(s.jobs, id)
+			}
+			continue
+		}
+		// 已结束：从完成时刻起保留一个 TTL，与文件存储寿命对齐
+		if j.DoneAt.Before(now.Add(-s.ttl)) {
 			delete(s.jobs, id)
 		}
 	}

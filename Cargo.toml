@@ -1,6 +1,6 @@
 [package]
 name = "flowconvert"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "FlowConvert web server (Rust rewrite) - formats conversion, ID photo, translation, AI video/image generation"
 license = "Apache-2.0"

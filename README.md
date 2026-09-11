@@ -3,27 +3,25 @@
 [![Go Version](https://img.shields.io/badge/go-1.25-blue.svg)](https://golang.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache--3.0-green.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.1.6-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/version-v0.1.7-brightgreen.svg)](#)
 
 文档与媒体转换服务。Go 与 Rust 双实现共用同一套 Python 脚本；内置 OCR，扫描件/照片式 PDF 可识别并按原版式导出。
 
 当前仓库默认分支为 `rust-rewrite`（Go + Rust 并存）。`main` 仅保留 Go。OCR 识别引擎是 `scripts/ocr.py`，Go / Rust 都通过子进程调用，不在服务端原生化。
 
-## 🆕 v0.1.6 本次更新
+## 🆕 v0.1.7 本次更新
 
-**版本号 `v0.1.6`**（在上版 `v0.1.5` 基础上 +0.0.1）。本次为质量加固 + 能力增强 + 全量审查，不改变既有 API 契约。
+**版本号 `v0.1.7`**（在上版 `v0.1.6` 基础上 +0.0.1）。本次聚焦 AI 视频生成的可靠性与一致性，不改变既有 API 契约。
 
 ### 新增 / 改进
 
 | 类别 | 改动 |
 |------|------|
-| 证件照·高清 | 新增「输出规格」选项：标准 300DPI（国标打印）/ 高清 600DPI（像素×4，线上上传/冲印）。前端 `hi_res` 开关贯通 `idphoto.py` → `MakeIdPhoto` → `POST /api/convert/idphoto` |
-| 证件照·发丝 | 发丝换底色对齐「换背景」管线：抠图分辨率下限 1280→1600、先合成纯色再整体缩放、发丝 alpha 高斯羽化（GaussianBlur k5） |
-| 图像编辑·解码 | 修复本地降级编辑只认 PNG 的 bug：`MakeEditedImage` 由 `png.Decode` 改 `image.Decode`（全格式），新增回归测试（PNG/JPEG/GIF/BMP/TIFF + 垃圾字节负例） |
-| 安全·SSRF | `validateDownloadURL` 复用 `isBlockedIP`，补上 CGNAT(100.64/8)/TEST-NET/多播 拦截，与 `fetch.go` 三层防护判据对齐 |
-| 视频·Agnes Python 管线 | `scripts/agnes_video.py`：LLM(agnes-3.0-flash) 分析 → 分段 agnes-video-2.5-flash 生成 → ffmpeg 归一化拼接；首尾帧/参考图自动去水印；handler 先走 Python、失败降级 Go 再降级本地合成 |
-| OCR·试卷后处理 | 选项间距/引号/粘字修复（exam 模式），字符集修正后重建 opencc 转换器 |
-| 测试 | 全量代码/安全审查 + 单元/集成回归：Go `go test ./...`、Rust `cargo test`（85 单测 + 23 集成）全绿 |
+| 视频·任务过期修复 | 修复"AI 已生成但页面提示任务不存在或已过期"：任务 GC 依据从**创建时间**改为**完成时间**；运行中任务 2 小时兜底不回收（长生成不再中途被清），完成后保留 2 小时（与文件存储寿命对齐）。Go（`videotask.go` + `main.go`）与 Rust（`store.rs` + `lib.rs`）双端同改，新增 GC 行为单测 |
+| 视频·动作保真 | `agnes_video.py` 的 LLM 改写 prompt 新增动作保真规则：身体部位数量/左右/姿势逐字保留不泛化（"单手比心"不再生成"双手比心"）；抽象动作名转写为具体肢体描述（哪只手、抬到哪、呈什么形状）并显式声明其余肢体状态；舞蹈/动作按节拍拆解为起始姿势 → 轨迹 → 定格 |
+| 视频·外观一致性 | 新增外观设定锁定：首尾帧/参考图模式下 LLM 输出 `setting` 字段（服装款式/扣子/图案/发型/场景/色调），代码逐字拼进每个分段 prompt——细节只生成一次、全片复用，解决分段间细节漂移（如第一段有扣子、下一段没了） |
+| 视频·前端引导 | 视频页输入框提示改为动作类写法引导（写清哪只手、抬到哪儿、其余肢体做什么） |
+| 修复·配置对齐 | `agnes_video.py` 的 `AGNES_BASE_URL` 默认值与 Go 端对齐为 `https://apihub.agnes-ai.cn/v1`（原为 `.com`，未配置环境变量时两端会打到不同端点） |
 
 ### 技术栈
 
@@ -35,8 +33,6 @@
   - AI：Agnes 图像 / 视频 / LLM（`agnes-video-2.5-flash`、`agnes-image-2.5-flash`、`agnes-3.0-flash`）
 - **系统依赖**：Tesseract、FFmpeg、Poppler、Inkscape、Potrace
 - **前端**：`web/*.html`（原生 JS，无框架），单页 `index / ocr / translate / video / image / idphoto`
-
-详见下文「OCR 管线」「快速开始」「版本历史」。
 
 ## 功能特性
 
@@ -51,9 +47,9 @@
 | 链接翻译 | `POST /api/translate/url` | 输入网页 URL 提取正文并翻译（SSRF 防护） |
 | OCR 文字识别 | `POST /api/ocr` | 图片/PDF 提取文字，原版式导出 TXT/Word/Excel/JSON，可翻译为简体中文，支持试卷模式 |
 | AI 文生图 | `POST /api/convert/image/text` | 文本生成图像 |
-| AI 视频生成 | `POST /api/convert/video/text` | 文本生成视频 |
-| AI 视频（首尾帧） | `POST /api/convert/video/keyframe` | 首尾帧控制视频生成 |
-| AI 视频（参考图） | `POST /api/convert/video/ref` | 多张参考图生成视频 |
+| AI 视频生成 | `POST /api/convert/video/text` | 文本生成视频，动作保真 prompt 改写 |
+| AI 视频（首尾帧） | `POST /api/convert/video/keyframe` | 首尾帧控制视频生成，外观设定锁定 |
+| AI 视频（参考图） | `POST /api/convert/video/ref` | 多张参考图生成视频，外观设定锁定 |
 | 下载管理 | `GET /api/download/{name}` | 文件下载与 TTL 自动清理 |
 
 ## 架构
@@ -63,11 +59,12 @@
     │
     ▼
 Go 服务 (main.go)  或  Rust 服务 (src/, cargo)
-    │  HTTP 壳：路由、校验、限流、下载
+    │  HTTP 壳：路由、校验、限流、下载、任务状态管理
     ▼
 scripts/*.py
-    ├── ocr.py          OCR 主流程（本版本重点）
+    ├── ocr.py          OCR 主流程
     ├── pp_ocr_onnx.py  PP-OCR ONNX 推理（det v4 + rec v6）
+    ├── agnes_video.py  AI 视频管线（LLM 分析 → 分段生成 → ffmpeg 拼接）
     ├── translate.py    翻译
     └── pdf2docx.py 等  格式转换
     │
@@ -81,6 +78,30 @@ models/ocr/
 ```
 
 Go 与 Rust 是同一套 HTTP API 的两种实现，业务能力对齐。OCR 参数（含 `exam`）序列化成 JSON，传给 `python3 scripts/ocr.py --options ...`。
+
+## AI 视频管线
+
+`scripts/agnes_video.py`，三种模式：文生视频 / 首尾帧 / 参考图。
+
+```mermaid
+flowchart TD
+    A["用户 prompt + 可选图片"] --> B["LLM(agnes-3.0-flash) 分析"]
+    B --> C["动作保真改写<br>具体肢体描述 + 其余肢体状态"]
+    B --> D["外观设定 setting<br>服装/扣子/发型/场景/色调"]
+    C --> E["按时长切分分段 4-12s"]
+    D --> E
+    E --> F["逐段 agnes-video-2.5-flash"]
+    F --> G["末帧衔接: 上段末帧作下段首帧"]
+    G --> H["ffmpeg 归一化拼接"]
+    H --> I["任务完成后保留 2 小时可下载"]
+```
+
+一致性设计：
+
+1. **动作保真**：用户对身体部位数量、左右手、姿势的指定逐字保留；抽象动作名（如"比心"）转写为具体肢体描述，并显式声明其余肢体状态（"左手自然下垂，不参与动作"），防止模型按常见姿势脑补。
+2. **外观锁定**：`setting` 只生成一次，逐字拼进每个分段 prompt，全片复用。
+3. **末帧衔接**：第 i 段以上一段的末帧为首帧（keyframe 模式），画面连续不跳场景。
+4. **任务寿命**：运行中不回收（2 小时兜底）；完成后从完成时刻起保留 2 小时，与文件存储 TTL 对齐。
 
 ## OCR 管线
 
@@ -127,10 +148,7 @@ flowchart TD
 
 1. **PDF 优先文本层**。可复制文字直接抽 bbox（`engine=pdftext`）。子集字体缺 ToUnicode 时判定乱码，回退图像 OCR，并写入 `warnings`。
 2. **主遍是 Tesseract**。拿词框和阅读序；bbox 始终来自主遍，v6 只改文字、不动版面。
-3. **按行分流 PP-OCRv6**（`_route_cjk_lines`）：
-   - 含中文（含中英混合）→ v6 rec + jieba 通用纠错
-   - 低分辨率英文选项块（A/B/C/D）→ v6 + 字符级纠错 + 选项规范化
-   - 高分辨率纯英文 → 保留 Tesseract
+3. **按行分流 PP-OCRv6**（`_route_cjk_lines`）：含中文（含中英混合）→ v6 rec + jieba 通用纠错；低分辨率英文选项块 → v6 + 字符级纠错 + 选项规范化；高分辨率纯英文 → 保留 Tesseract。
 4. **中文主路线固定 v6**。`pp_ocr_onnx.py` 默认 `v6_rec.onnx`；无内嵌字符表时按输出通道选字典（通道 > 10000 用 `ppocr_keys_v6.txt`）。v4/v5 模型仅作兼容保留。
 
 ### 后处理三层
@@ -140,24 +158,6 @@ flowchart TD
 | 1. 置信度 | Tesseract 词 / v6 字符 | 低置信字符用第二候选替换 |
 | 2. 词级纠错 | 英文 token | 词表 + 编辑距离 1；已在词表的词不动。正则 `[A-Za-z]+(?:['’][A-Za-z]+)*` 整词匹配含撇号缩略词，避免 `wouldn't` 被拆开误改 |
 | 3. 固定搭配 | 仅 `exam=1` | 试卷英文整词映射、选项混淆矩阵、中文固定短语、行尾吞字补回 |
-
-通用层（始终启用，误伤低）：
-
-- 句首 `rt's/lt's` → `It's`（直撇号与弯撇号都匹配）
-- `I'I` → `I'll`，`but|` → `but I`，`would't` → `wouldn't`
-- 题号括号统一为 `( )18.`，数字字母混淆 `SOIZB` → `50128`，分隔符固定为 `.`
-- 填空线被读成 `form i` / `form l` 时还原为 `___`
-- 粘连英文 DP 分词（`doingchores` → `doing chores`）
-- 过滤无字母/数字/汉字的纯标点行（分隔线、孤立 `—`）
-
-试卷模式额外启用（`exam=1`）：
-
-- 英文整词：`tho`→`the`、`mako`→`make`、`Holon`→`Helen`、`Icttcr`→`letter`、`aftemoon`→`afternoon`、`Everv`→`Every`、`Sundav`→`Sunday`
-- 括号注释吞字：`patients(人)` → `patients(病人)`
-- 破折号：`一` 后跟大写字母时还原为 `—`（`一Yes` → `—Yes`）
-- 题号与英文粘连：`28morning` → `28 morning`
-- 中文行尾：`三个选` → `三个选项`，`选出一` → `选出一个`，`读两` → `读两遍`
-- 选项块混淆矩阵（`A.aia` → `A.a；a` 等）
 
 ### 接口示例
 
@@ -198,20 +198,7 @@ Go 与 Rust 二选一即可跑服务；OCR 始终需要 Python。
 | Inkscape | 1.2.2 | SVG→AI/EPS/PDF |
 | Potrace | 1.16 | SVG→DXF |
 
-**Python 依赖**（完整清单见 `requirements.txt`）
-
-| 类别 | 依赖（实测版本） |
-|------|------------------|
-| 图像处理 | Pillow 12.3.0、numpy 2.3.5、opencv-python-headless 5.0.0.93 |
-| PDF | PyMuPDF 1.28.2 |
-| 文档生成 | python-docx 1.2.0、openpyxl 3.1.5、python-pptx 1.0.2、reportlab 5.0.1 |
-| OCR | pytesseract 0.3.13、onnxruntime 1.29.0、pyclipper 1.4.0、shapely 2.1.2、jieba 0.42.1、opencc-python-reimplemented 0.1.7 |
-| 证件照 | rembg 2.0.83 |
-| 矢量化 | vtracer 0.6.15 |
-| 翻译 | translatepy 2.3 |
-| HTTP | requests 2.33.1、beautifulsoup4 4.14.3 |
-
-Go 侧无第三方 crate 以外的依赖（仅标准库）。Rust 依赖见 `Cargo.toml`。可选增强（缺失自动降级）：`paddleocr`、`easyocr`。
+**Python 依赖**：完整清单见 `requirements.txt`。可选增强（缺失自动降级）：`paddleocr`、`easyocr`。
 
 ### 安装 Tesseract OCR
 
@@ -280,7 +267,7 @@ cargo build --release
 | `FLOWCONVERT_DATA` | `data` | 数据目录（tmp/output 在此下） |
 | `FLOWCONVERT_BASE_URL` | `http://localhost:8080` | 公网访问地址（生成下载链接） |
 | `AGNES_API_KEY` | - | Agnes AI 图像/视频生成 API Key |
-| `AGNES_BASE_URL` | `https://apihub.agnes-ai.cn/v1` | Agnes API 端点 |
+| `AGNES_BASE_URL` | `https://apihub.agnes-ai.cn/v1` | Agnes API 端点（Go/Rust/Python 三端一致） |
 | `SENSENOVA_API_KEY` | - | SenseNova 备用图像生成 API Key |
 | `FLOWCONVERT_PYTHON` | `python3` | Python 解释器路径 |
 
@@ -308,7 +295,7 @@ flowconvert/
 ├── main.go                 Go 入口与路由
 ├── middleware.go           CORS / 限流 / 安全头
 ├── go.mod                  Go 模块（无版本字段，发布版本以 Cargo.toml 为准）
-├── Cargo.toml              Rust crate，当前 version = 0.1.6
+├── Cargo.toml              Rust crate，当前 version = 0.1.7
 ├── src/                    Rust 实现
 │   ├── main.rs / lib.rs
 │   ├── handler/            HTTP 处理器（含 ocr.rs exam 字段）
@@ -317,6 +304,7 @@ flowconvert/
 ├── scripts/
 │   ├── ocr.py              OCR 主流程与后处理
 │   ├── pp_ocr_onnx.py      PP-OCR ONNX（默认 v6 rec）
+│   ├── agnes_video.py      AI 视频管线（LLM 分析 → 分段生成 → ffmpeg 拼接）
 │   ├── translate.py
 │   ├── pdf2docx.py / pdf2xlsx.py
 │   ├── idphoto.py / sketch.py / vectorize.py / video.py
@@ -370,12 +358,12 @@ curl -X POST http://localhost:8080/api/convert/pdf-to-office \
 
 ```bash
 curl -X POST http://localhost:8080/api/convert/video/text \
-  -F "prompt=a cat walking" \
+  -F "prompt=一个女孩跳舞，右手抬至脸颊旁比心，左手自然下垂不动" \
   -F "duration=10" \
   -F "aspect_ratio=16:9"
 ```
 
-轮询：`GET /api/convert/video/task/{task_id}`。
+轮询：`GET /api/convert/video/task/{task_id}`。任务完成后保留 2 小时。
 
 ## 安全特性
 
@@ -385,6 +373,7 @@ curl -X POST http://localhost:8080/api/convert/video/text \
 - **路径穿越防护**：文件名净化 + 路径规范化
 - **限流**：每 IP 滑动窗口，bucket 上限 10000
 - **并发**：视频生成最多 6 个任务，超出 503
+- **任务寿命**：视频任务运行中不回收，完成后保留 2 小时；文件存储 TTL 2 小时
 - **错误脱敏**：内部错误只记 stderr
 - **输入校验**：输出格式白名单、提示词 2000 字符、数值范围、JSON body 大小
 - **安全响应头**：`nosniff`、`DENY`、XSS Protection、CSP
@@ -394,7 +383,7 @@ curl -X POST http://localhost:8080/api/convert/video/text \
 ```bash
 # Go
 go test ./...
-go test ./internal/handler -v -run TestFileStore
+go test ./internal/handler -v -run TestVideoJob
 go run .
 
 # Rust
@@ -403,6 +392,12 @@ cargo run
 ```
 
 ## 版本历史
+
+- **v0.1.7** (2026-09) AI 视频可靠性与一致性
+  - 修复视频任务过早过期：GC 依据从创建时间改为完成时间，运行中 2 小时兜底，完成后保留 2 小时（Go + Rust 双端）
+  - 动作保真 prompt 改写：身体部位指定逐字保留（单手不再变双手），抽象动作转写为具体肢体描述
+  - 外观设定锁定：`setting` 字段逐字拼进每个分段，修复分段间服装/场景细节漂移
+  - `AGNES_BASE_URL` 默认值 Go/Python 对齐为 `.cn`
 
 - **v0.1.6** (2026-09) 质量加固 + 能力增强 + 全量审查
   - 证件照新增「输出规格」：标准 300DPI / 高清 600DPI（像素×4），前端开关贯通后端
