@@ -10,6 +10,7 @@ use serde_json::json;
 use crate::store::VideoJobStore;
 
 const AGNES_VIDEO_MODEL: &str = "agnes-video-2.5-flash";
+pub const AGNES_IMAGE_MODEL: &str = "agnes-image-2.5-flash";
 const SEGMENT_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Clone)]

@@ -30,33 +30,38 @@ def fallback_mask(H, W):
 
 
 def rembg_alpha(orig_bgr):
-    """用 rembg 人体分割返回 alpha(0-255 uint8)。失败抛异常。
-    开启 alpha matting 精修半透明发丝 + decontaminate 去除发丝边缘的背景色渗染，
-    使头发边缘能随新背景换色；matting 失败则退回普通后处理。"""
+    """用 rembg 人体分割返回 alpha(0-255 uint8)，与原图同分辨率。失败抛异常。
+
+    u2net_human_seg 在 320x320 推理，输出接近二值的 mask；alpha_matting / post_process
+    对此无改善（trimap 过渡区太窄 → 仍二值），反而 post_process 做形态学二值化。
+    因此只取原始 mask，alpha 软过渡 + 去污在 main() 用 estimate_foreground_ml 完成。"""
     import cv2
     import numpy as np
 
     from rembg import new_session, remove
+    import onnxruntime as ort
+
+    opts = ort.SessionOptions()
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
 
     rgb = cv2.cvtColor(orig_bgr, cv2.COLOR_BGR2RGB)
-    sess = new_session("u2net_human_seg")
-    try:
-        out = remove(
-            rgb,
-            session=sess,
-            alpha_matting=True,
-            alpha_matting_foreground_threshold=240,
-            alpha_matting_background_threshold=10,
-            alpha_matting_erode_size=8,
-            decontaminate=True,
-            post_process_mask=True,
-        )
-    except Exception:  # noqa: BLE001  matting 不可用（缺 pymatting/模型异常）则退回
-        out = remove(rgb, session=sess, post_process_mask=True)
+    H0, W0 = rgb.shape[:2]
+    max_side = 2048
+    scale = 1.0
+    if max(H0, W0) > max_side:
+        scale = max_side / max(H0, W0)
+        rgb = cv2.resize(rgb, (int(W0 * scale), int(H0 * scale)), interpolation=cv2.INTER_AREA)
+    sess = new_session(model_name="u2net_human_seg", sess_opts=opts)
+    out = remove(rgb, session=sess)
     if hasattr(out, "convert"):
         out = out.convert("RGBA")
     arr = np.array(out)
-    return arr[..., 3]
+    a_small = arr[..., 3]
+    if scale != 1.0:
+        alpha = cv2.resize(a_small, (W0, H0), interpolation=cv2.INTER_LINEAR)
+    else:
+        alpha = a_small
+    return alpha
 
 
 def main():
@@ -89,21 +94,33 @@ def main():
     try:
         alpha255 = rembg_alpha(orig)
         alpha = alpha255.astype(np.float32) / 255.0
-        # 轻微羽化边缘，减少接缝（人物内部保持 255，像素不变）
+        # 小 blur 制造自然软过渡（u2net 输出接近二值，硬边像剪纸）
         alpha = cv2.GaussianBlur(alpha, (5, 5), 0)
         kept = float((alpha255 > 128).mean())
-        # 覆盖率过低：模型未检出人体 → 几何兜底，避免整张涂成背景丢掉人物
+        # 覆盖率过低：模型未检出人体 → 几何兜底
         if kept < 0.03:
             method = "center"
             alpha = fallback_mask(H, W)
+            fg = orig
             kept = float(alpha.mean())
+        else:
+            # 对 blur 后的完整过渡区做 ML 去污。pymatting 失败时仍用 rembg 掩膜 + 原图像素，
+            # 不能整段退回几何掩膜，否则人体分割结果被丢掉。
+            try:
+                import pymatting
+                rgb_img = cv2.cvtColor(orig, cv2.COLOR_BGR2RGB).astype(np.float64) / 255.0
+                fg_ml = pymatting.estimate_foreground_ml(rgb_img, alpha)
+                fg = cv2.cvtColor((np.clip(fg_ml, 0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+            except Exception:
+                fg = orig
     except Exception as e:  # noqa: BLE001
         method = "center"
         alpha = fallback_mask(H, W)
+        fg = orig
         kept = float(alpha.mean())
 
     rgb = alpha[..., None]
-    out = (orig.astype(np.float32) * rgb + bg.astype(np.float32) * (1.0 - rgb)).astype(np.uint8)
+    out = (fg.astype(np.float32) * rgb + bg.astype(np.float32) * (1.0 - rgb)).astype(np.uint8)
     if not cv2.imwrite(out_p, out):
         emit({"ok": False, "error": "write output failed"})
         return

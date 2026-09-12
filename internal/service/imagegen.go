@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // MakeImage generates a procedural abstract image from a text prompt.
@@ -902,11 +903,10 @@ func MakeEditedImageAI(client *AIClient, tmpDir, srcPath, prompt, sizeKey string
 	return dest, nil
 }
 
-// MakeEditedImageComposed 换背景（保留人物像素不变）：
+// MakeEditedImageComposed 换背景：
 // 1) 用 AI 生成一张"空场景"背景（跟随原图比例档位），裁剪回原图精确尺寸；
-// 2) Python GrabCut 把原图人物抠出（前景），羽化边缘；
-// 3) 原图人物像素叠加到生成的背景上——人物 100% 原样，只有背景被替换。
-// 抠图失败 / 无 AI / 无原图尺寸时，退回 MakeEditedImageAI（图生图）。
+// 2) 把原图 + 背景图一起发给 AI 做合成（AI 能正确处理发丝边缘，优于本地 rembg 320x320 二值 mask）；
+// 3) AI 合成失败时退回本地 compose_bg.py（rembg），再失败退回 MakeEditedImageAI（图生图）。
 func MakeEditedImageComposed(client *AIClient, tmpDir, srcPath, prompt, sizeKey string, origW, origH int) (string, error) {
 	if client == nil || origW <= 0 || origH <= 0 || (!client.HasAgnes() && !client.HasSenseNova()) {
 		return MakeEditedImageAI(client, tmpDir, srcPath, prompt, sizeKey, origW, origH)
@@ -952,9 +952,35 @@ func MakeEditedImageComposed(client *AIClient, tmpDir, srcPath, prompt, sizeKey 
 		of.Close()
 	}
 
-	// 2. + 3. GrabCut 抠图 + 叠加
+	// 2. AI 合成：原图 + 背景图 → AI 合成（发丝边缘自然，优于本地 rembg 320x320 二值 mask）
 	dest := filepath.Join(tmpDir, "edited.png")
-	outJSON, perr := RunCmd(PythonPath(), ScriptPath("compose_bg.py"), srcPath, bgOut, dest)
+	srcURI, srcErr := FileToDataURI(srcPath)
+	bgURI, bgErr := FileToDataURI(bgOut)
+	if srcErr == nil && bgErr == nil && client.HasAgnes() {
+		compositePrompt := prompt + ", place the person from the first reference image onto the background of the second reference image, keep the person identical, only change the background"
+		if imgURL, b64, e := client.GenImageAgnes(agnesImageModel, compositePrompt, tier, ratio, []string{srcURI, bgURI}); e == nil {
+			if dErr := client.DownloadImage(imgURL, b64, dest); dErr == nil {
+				// 裁剪回原图精确宽高比
+				if ff, ffErr := os.Open(dest); ffErr == nil {
+					if im, _, dd := image.Decode(ff); dd == nil {
+						ff.Close()
+						if oo, ooErr := os.Create(dest); ooErr == nil {
+							_ = png.Encode(oo, cropToRatio(im, origW, origH))
+							oo.Close()
+						}
+					} else {
+						ff.Close()
+					}
+				}
+				return dest, nil
+			}
+		}
+	}
+	log.Printf("[compose-edit] AI合成失败，退回本地 rembg 合成")
+
+	// 3. 退回本地 compose_bg.py（rembg）
+	const composeTimeout = 120 * time.Second
+	outJSON, perr := RunCmdTimeout(composeTimeout, PythonPath(), ScriptPath("compose_bg.py"), srcPath, bgOut, dest)
 	var res struct {
 		Ok       bool    `json:"ok"`
 		Error    string  `json:"error"`
@@ -963,8 +989,8 @@ func MakeEditedImageComposed(client *AIClient, tmpDir, srcPath, prompt, sizeKey 
 	if perr == nil && json.Unmarshal([]byte(strings.TrimSpace(outJSON)), &res) == nil && res.Ok {
 		return dest, nil
 	}
-	// 合成失败：退回图生图
-	log.Printf("[compose-edit] 合成失败(perr=%v out=%s)，退回图生图", perr, strings.TrimSpace(outJSON))
+	// 本地合成也失败：退回图生图
+	log.Printf("[compose-edit] 本地合成失败(perr=%v out=%s)，退回图生图", perr, strings.TrimSpace(outJSON))
 	return MakeEditedImageAI(client, tmpDir, srcPath, prompt, sizeKey, origW, origH)
 }
 

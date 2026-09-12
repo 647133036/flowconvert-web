@@ -1,7 +1,9 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use image::{DynamicImage, GenericImage, GenericImageView, ImageBuffer, Rgba};
-use crate::service::aiclient::AIClient;
+use crate::service::aiclient::{AIClient, AGNES_IMAGE_MODEL};
+use crate::util::{python_path, run_cmd_timeout, script_path};
 
 
 /// Procedural abstract image generation using image crate.
@@ -498,7 +500,7 @@ pub async fn make_image_ai(
 
     // Try Agnes first
     if client.has_agnes() {
-        match client.gen_image_agnes("agnes-image-2.1-flash", prompt, &size, &ratio, &[]).await {
+        match client.gen_image_agnes(AGNES_IMAGE_MODEL, prompt, &size, &ratio, &[]).await {
             Ok((img_url, b64)) => {
                 if client.download_image(&img_url, &b64, dest.to_string_lossy().as_ref()).await.is_ok() {
                     return Ok(dest.to_string_lossy().to_string());
@@ -536,7 +538,7 @@ pub async fn make_edited_image_ai(
 
     // Try Agnes first
     if client.has_agnes() {
-        match client.gen_image_agnes("agnes-image-2.1-flash", prompt, &size, &ratio, &[data_uri.clone()]).await {
+        match client.gen_image_agnes(AGNES_IMAGE_MODEL, prompt, &size, &ratio, &[data_uri.clone()]).await {
             Ok((img_url, b64)) => {
                 if client.download_image(&img_url, &b64, dest.to_string_lossy().as_ref()).await.is_ok() {
                     return Ok(dest.to_string_lossy().to_string());
@@ -580,7 +582,7 @@ pub async fn make_compose_image_ai(
 
     // Try Agnes first
     if client.has_agnes() {
-        match client.gen_image_agnes("agnes-image-2.1-flash", prompt, &size, &ratio, &data_uris).await {
+        match client.gen_image_agnes(AGNES_IMAGE_MODEL, prompt, &size, &ratio, &data_uris).await {
             Ok((img_url, b64)) => {
                 if client.download_image(&img_url, &b64, dest.to_string_lossy().as_ref()).await.is_ok() {
                     return Ok(dest.to_string_lossy().to_string());
@@ -601,6 +603,204 @@ pub async fn make_compose_image_ai(
         }
     }
     Err("AI图片合成不可用".to_string())
+}
+
+const AGNES_RATIO_TIERS: &[(&str, f64)] = &[
+    ("1:1", 1.0),
+    ("16:9", 16.0 / 9.0),
+    ("9:16", 9.0 / 16.0),
+    ("4:3", 4.0 / 3.0),
+    ("3:4", 3.0 / 4.0),
+    ("2:3", 2.0 / 3.0),
+    ("3:2", 3.0 / 2.0),
+];
+
+fn nearest_agnes_ratio(w: i32, h: i32) -> String {
+    if w <= 0 || h <= 0 {
+        return "1:1".to_string();
+    }
+    let target = w as f64 / h as f64;
+    let mut best = "1:1";
+    let mut best_dist = f64::MAX;
+    for (ratio, val) in AGNES_RATIO_TIERS {
+        let d = (target.ln() - val.ln()).abs();
+        if d < best_dist {
+            best_dist = d;
+            best = ratio;
+        }
+    }
+    best.to_string()
+}
+
+fn agnes_short_side(tier: &str) -> i32 {
+    match tier {
+        "2K" => 1536,
+        "3K" => 2048,
+        "4K" => 2560,
+        _ => 1024,
+    }
+}
+
+fn ratio_dims(ratio: &str) -> (i32, i32) {
+    let mut a = 1;
+    let mut b = 1;
+    if let Some((l, r)) = ratio.split_once(':') {
+        if let (Ok(x), Ok(y)) = (l.parse::<i32>(), r.parse::<i32>()) {
+            if x > 0 && y > 0 {
+                a = x;
+                b = y;
+            }
+        }
+    }
+    (a, b)
+}
+
+pub fn resolve_edit_dims(size_key: &str, orig_w: i32, orig_h: i32) -> (String, String, i32, i32) {
+    let ratio = nearest_agnes_ratio(orig_w, orig_h);
+    let tier = match size_key.to_ascii_lowercase().as_str() {
+        "1k" => "1K".to_string(),
+        "2k" => "2K".to_string(),
+        "4k" => "4K".to_string(),
+        _ => size_to_tier(orig_w, orig_h),
+    };
+    let (aw, ah) = ratio_dims(&ratio);
+    let short = agnes_short_side(&tier);
+    let (mut canvas_w, mut canvas_h) = if aw >= ah {
+        (short * aw / ah, short)
+    } else {
+        (short, short * ah / aw)
+    };
+    if canvas_w < 2 {
+        canvas_w = 2;
+    }
+    if canvas_h < 2 {
+        canvas_h = 2;
+    }
+    (tier, ratio, canvas_w, canvas_h)
+}
+
+fn crop_to_ratio(src: &DynamicImage, tw: i32, th: i32) -> DynamicImage {
+    let (sw, sh) = src.dimensions();
+    if tw <= 0 || th <= 0 || sw == 0 || sh == 0 {
+        return src.clone();
+    }
+    let tr = tw as f64 / th as f64;
+    let sr = sw as f64 / sh as f64;
+    let (cw, ch, x0, y0) = if sr > tr {
+        let ch = sh;
+        let cw = ((sh as f64) * tr + 0.5) as u32;
+        let x0 = (sw.saturating_sub(cw)) / 2;
+        (cw.max(1), ch, x0, 0u32)
+    } else {
+        let cw = sw;
+        let ch = ((sw as f64) / tr + 0.5) as u32;
+        let y0 = (sh.saturating_sub(ch)) / 2;
+        (cw, ch.max(1), 0u32, y0)
+    };
+    let cropped = src.crop_imm(x0, y0, cw, ch);
+    cropped.resize_exact(tw as u32, th as u32, image::imageops::FilterType::Triangle)
+}
+
+fn background_prompt(user_prompt: &str) -> String {
+    format!(
+        "{}, empty scene background, no people, no human, no person, wide angle, photorealistic, high detail",
+        user_prompt.trim()
+    )
+}
+
+fn save_cropped_png(src_path: &str, dest: &str, orig_w: i32, orig_h: i32) -> Result<(), String> {
+    let data = std::fs::read(src_path).map_err(|e| e.to_string())?;
+    let img = image::load_from_memory(&data).map_err(|e| e.to_string())?;
+    let cropped = crop_to_ratio(&img, orig_w, orig_h);
+    cropped.save(dest).map_err(|e| e.to_string())
+}
+
+/// 换背景：AI 空场景 → AI 合成（发丝）→ 本地 rembg → 图生图。
+pub async fn make_edited_image_composed(
+    client: &AIClient,
+    tmp_dir: &str,
+    src_path: &str,
+    prompt: &str,
+    size_key: &str,
+    orig_w: i32,
+    orig_h: i32,
+) -> Result<String, String> {
+    if orig_w <= 0 || orig_h <= 0 || (!client.has_agnes() && !client.has_sensenova()) {
+        return make_edited_image_ai(client, tmp_dir, src_path, prompt, orig_w, orig_h).await;
+    }
+
+    let (tier, ratio, _, _) = resolve_edit_dims(size_key, orig_w, orig_h);
+    let bg_prompt = background_prompt(prompt);
+    let bg_raw = PathBuf::from(tmp_dir).join("bg_raw.png");
+    let bg_raw_s = bg_raw.to_string_lossy().to_string();
+    let mut got = false;
+    if client.has_agnes() {
+        if let Ok((u, b)) = client.gen_image_agnes(AGNES_IMAGE_MODEL, &bg_prompt, &tier, &ratio, &[]).await {
+            if client.download_image(&u, &b, &bg_raw_s).await.is_ok() {
+                got = true;
+            }
+        }
+    }
+    if !got && client.has_sensenova() {
+        if let Ok((u, b)) = client
+            .gen_image_sense_nova("sensenova-u1.5-lite", &bg_prompt, &tier, &ratio, &[])
+            .await
+        {
+            if client.download_image(&u, &b, &bg_raw_s).await.is_ok() {
+                got = true;
+            }
+        }
+    }
+    if !got {
+        return make_edited_image_ai(client, tmp_dir, src_path, prompt, orig_w, orig_h).await;
+    }
+
+    let bg_out = PathBuf::from(tmp_dir).join("bg.png");
+    let bg_out_s = bg_out.to_string_lossy().to_string();
+    if save_cropped_png(&bg_raw_s, &bg_out_s, orig_w, orig_h).is_err() {
+        return make_edited_image_ai(client, tmp_dir, src_path, prompt, orig_w, orig_h).await;
+    }
+
+    let dest = PathBuf::from(tmp_dir).join("edited.png");
+    let dest_s = dest.to_string_lossy().to_string();
+    if client.has_agnes() {
+        if let (Ok(src_uri), Ok(bg_uri)) = (AIClient::file_to_data_uri(src_path), AIClient::file_to_data_uri(&bg_out_s)) {
+            let composite_prompt = format!(
+                "{}, place the person from the first reference image onto the background of the second reference image, keep the person identical, only change the background",
+                prompt
+            );
+            if let Ok((img_url, b64)) = client
+                .gen_image_agnes(AGNES_IMAGE_MODEL, &composite_prompt, &tier, &ratio, &[src_uri, bg_uri])
+                .await
+            {
+                if client.download_image(&img_url, &b64, &dest_s).await.is_ok() {
+                    let _ = save_cropped_png(&dest_s, &dest_s, orig_w, orig_h);
+                    return Ok(dest_s);
+                }
+            }
+        }
+    }
+    tracing::warn!("[compose-edit] AI合成失败，退回本地 rembg 合成");
+
+    let script = script_path("compose_bg.py");
+    let result = run_cmd_timeout(
+        Duration::from_secs(120),
+        python_path(),
+        &[&script, src_path, &bg_out_s, &dest_s],
+    );
+    if result.error.is_none() {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(result.stdout.trim()) {
+            if v.get("ok").and_then(|x| x.as_bool()) == Some(true) {
+                return Ok(dest_s);
+            }
+        }
+    }
+    tracing::warn!(
+        "[compose-edit] 本地合成失败(err={:?} out={})，退回图生图",
+        result.error,
+        result.stdout.trim()
+    );
+    make_edited_image_ai(client, tmp_dir, src_path, prompt, orig_w, orig_h).await
 }
 
 #[allow(dead_code)]
@@ -691,5 +891,47 @@ mod tests {
         assert_eq!(ratio_from_dims(100, 100), "1:1");
         assert_eq!(ratio_from_dims(4, 3), "4:3");
         assert_eq!(ratio_from_dims(3, 4), "3:4");
+    }
+
+    #[test]
+    fn test_nearest_agnes_ratio() {
+        assert_eq!(nearest_agnes_ratio(1080, 1920), "9:16");
+        assert_eq!(nearest_agnes_ratio(1920, 1080), "16:9");
+        assert_eq!(nearest_agnes_ratio(1024, 1024), "1:1");
+        assert_eq!(nearest_agnes_ratio(0, 0), "1:1");
+        assert_eq!(nearest_agnes_ratio(1792, 1024), "16:9");
+        assert_eq!(nearest_agnes_ratio(768, 1024), "3:4");
+    }
+
+    #[test]
+    fn test_resolve_edit_dims() {
+        let (tier, ratio, cw, ch) = resolve_edit_dims("original", 1080, 1920);
+        assert_eq!(ratio, "9:16");
+        assert!(!tier.is_empty());
+        assert!(cw <= ch);
+        let (_, r, cw2, ch2) = resolve_edit_dims("4k", 1080, 1920);
+        assert_eq!(r, "9:16");
+        assert!(cw2 < ch2);
+        let (tier, ratio, cw, ch) = resolve_edit_dims("", 0, 0);
+        assert_eq!(ratio, "1:1");
+        assert!(!tier.is_empty());
+        assert_eq!(cw, ch);
+    }
+
+    #[test]
+    fn test_crop_to_ratio() {
+        let tier_img = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(1312, 736, Rgba([30, 80, 200, 255])));
+        let got = crop_to_ratio(&tier_img, 700, 400);
+        assert_eq!(got.dimensions(), (700, 400));
+        let c = got.get_pixel(350, 200);
+        assert!(c[0] >= 20 && c[1] >= 60 && c[2] >= 160, "中心像素被破坏: {:?}", c);
+
+        let portrait = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(736, 1312, Rgba([10, 10, 10, 255])));
+        let got2 = crop_to_ratio(&portrait, 900, 1600);
+        assert_eq!(got2.dimensions(), (900, 1600));
+
+        let same = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(800, 600, Rgba([1, 2, 3, 255])));
+        let got3 = crop_to_ratio(&same, 800, 600);
+        assert_eq!(got3.dimensions(), (800, 600));
     }
 }

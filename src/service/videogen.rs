@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::service::aiclient::AIClient;
+use crate::service::aiclient::{AIClient, AGNES_IMAGE_MODEL};
 use crate::util::{python_path, script_path};
 
 /// Marshal video generation payload to JSON bytes.
@@ -408,7 +408,7 @@ pub async fn ensure_public_url(
         return Ok(data_uri);
     }
     // Fall back to generating via image API
-    match client.gen_image_agnes("agnes-image-2.1-flash", gen_prompt, "1K", "16:9", &[]).await {
+    match client.gen_image_agnes(AGNES_IMAGE_MODEL, gen_prompt, "1K", "16:9", &[]).await {
         Ok((img_url, _)) => Ok(img_url),
         Err(e) => Err(format!("图片处理失败: {}", e)),
     }

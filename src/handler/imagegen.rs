@@ -2,6 +2,7 @@ use axum::extract::{Multipart, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use image::GenericImageView;
 
 use crate::service;
 use crate::util::{image_input_exts, new_id};
@@ -173,12 +174,16 @@ pub async fn handle_edit_image(
             "error": "请选择要编辑的图像"
         }))).into_response();
     }
-    if image::load_from_memory(&data).is_err() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-            "success": false,
-            "error": "图片解码失败"
-        }))).into_response();
-    }
+    let decoded = match image::load_from_memory(&data) {
+        Ok(img) => img,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "success": false,
+                "error": "图片解码失败"
+            }))).into_response();
+        }
+    };
+    let (orig_w, orig_h) = decoded.dimensions();
 
     let prompt = match prompt {
         Some(p) if !p.trim().is_empty() => p,
@@ -196,8 +201,6 @@ pub async fn handle_edit_image(
         }))).into_response();
     }
 
-    let (width, height) = parse_size_param(&size_param);
-
     let tmp_dir = cfg.tmp_dir.join(format!("imgedit_{}", new_id(8)));
     std::fs::create_dir_all(&tmp_dir).ok();
 
@@ -211,10 +214,18 @@ pub async fn handle_edit_image(
 
     let src_str = src_path.to_string_lossy().to_string();
     let tmp_str = tmp_dir.to_string_lossy().to_string();
+    let size_key = size_param.clone().unwrap_or_default();
 
-    // Try AI path first
     if let Some(ref client) = app.client {
-        if let Ok(path) = service::make_edited_image_ai(&client, &tmp_str, &src_str, &prompt, width, height).await {
+        if let Ok(path) = service::make_edited_image_composed(
+            client,
+            &tmp_str,
+            &src_str,
+            &prompt,
+            &size_key,
+            orig_w as i32,
+            orig_h as i32,
+        ).await {
             if let Ok(dl_url) = app.file_store.register(&path, "edited.png") {
                 return (StatusCode::OK, Json(serde_json::json!({
                     "success": true,
@@ -225,9 +236,8 @@ pub async fn handle_edit_image(
         }
     }
 
-    // Fallback to procedural
     let result = match tokio::task::spawn_blocking(move || {
-        service::make_edited_image(&tmp_str, &src_str, &prompt, width, height)
+        service::make_edited_image(&tmp_str, &src_str, &prompt, 0, 0)
     })
     .await {
         Ok(Ok(path)) => path,

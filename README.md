@@ -3,25 +3,24 @@
 [![Go Version](https://img.shields.io/badge/go-1.25-blue.svg)](https://golang.org/)
 [![Rust](https://img.shields.io/badge/rust-2021%20edition-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache--3.0-green.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-v0.1.7-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/version-v0.1.8-brightgreen.svg)](#)
 
 文档与媒体转换服务。Go 与 Rust 双实现共用同一套 Python 脚本；内置 OCR，扫描件/照片式 PDF 可识别并按原版式导出。
 
 当前仓库默认分支为 `rust-rewrite`（Go + Rust 并存）。`main` 仅保留 Go。OCR 识别引擎是 `scripts/ocr.py`，Go / Rust 都通过子进程调用，不在服务端原生化。
 
-## 🆕 v0.1.7 本次更新
+## 🆕 v0.1.8 本次更新
 
-**版本号 `v0.1.7`**（在上版 `v0.1.6` 基础上 +0.0.1）。本次聚焦 AI 视频生成的可靠性与一致性，不改变既有 API 契约。
+**版本号 `v0.1.8`**（在上版 `v0.1.7` 基础上 +0.0.1）。本次聚焦图像换背景发丝边缘，不改变既有 API 契约。
 
 ### 新增 / 改进
 
 | 类别 | 改动 |
 |------|------|
-| 视频·任务过期修复 | 修复"AI 已生成但页面提示任务不存在或已过期"：任务 GC 依据从**创建时间**改为**完成时间**；运行中任务 2 小时兜底不回收（长生成不再中途被清），完成后保留 2 小时（与文件存储寿命对齐）。Go（`videotask.go` + `main.go`）与 Rust（`store.rs` + `lib.rs`）双端同改，新增 GC 行为单测 |
-| 视频·动作保真 | `agnes_video.py` 的 LLM 改写 prompt 新增动作保真规则：身体部位数量/左右/姿势逐字保留不泛化（"单手比心"不再生成"双手比心"）；抽象动作名转写为具体肢体描述（哪只手、抬到哪、呈什么形状）并显式声明其余肢体状态；舞蹈/动作按节拍拆解为起始姿势 → 轨迹 → 定格 |
-| 视频·外观一致性 | 新增外观设定锁定：首尾帧/参考图模式下 LLM 输出 `setting` 字段（服装款式/扣子/图案/发型/场景/色调），代码逐字拼进每个分段 prompt——细节只生成一次、全片复用，解决分段间细节漂移（如第一段有扣子、下一段没了） |
-| 视频·前端引导 | 视频页输入框提示改为动作类写法引导（写清哪只手、抬到哪儿、其余肢体做什么） |
-| 修复·配置对齐 | `agnes_video.py` 的 `AGNES_BASE_URL` 默认值与 Go 端对齐为 `https://apihub.agnes-ai.cn/v1`（原为 `.com`，未配置环境变量时两端会打到不同端点） |
+| 图像·换背景 | `/api/convert/image/edit` 改为三级管线：先生成空场景背景，再把原图+背景一起发给 AI 合成（发丝边缘由模型处理），失败退回本地 `compose_bg.py`（rembg），再失败退回图生图。Go / Rust 双端对齐 |
+| 图像·本地抠图 | `compose_bg.py` 关闭 rembg 的 alpha_matting / post_process（u2net 320x320 输出接近二值，这两项无改善）；改用 `pymatting.estimate_foreground_ml` 对羽化过渡区去污；pymatting 失败仍保留 rembg 掩膜 |
+| 图像·超时 | 本地合成超时从默认 60s 提到 120s，避免大图 rembg 被误杀 |
+| 对齐·模型名 | Rust 图像模型从 `agnes-image-2.1-flash` 对齐到 `agnes-image-2.5-flash` |
 
 ### 技术栈
 
@@ -295,7 +294,7 @@ flowconvert/
 ├── main.go                 Go 入口与路由
 ├── middleware.go           CORS / 限流 / 安全头
 ├── go.mod                  Go 模块（无版本字段，发布版本以 Cargo.toml 为准）
-├── Cargo.toml              Rust crate，当前 version = 0.1.7
+├── Cargo.toml              Rust crate，当前 version = 0.1.8
 ├── src/                    Rust 实现
 │   ├── main.rs / lib.rs
 │   ├── handler/            HTTP 处理器（含 ocr.rs exam 字段）
@@ -392,6 +391,11 @@ cargo run
 ```
 
 ## 版本历史
+
+- **v0.1.8** (2026-09) 换背景发丝边缘
+  - 图像编辑三级管线：AI 空场景 → AI 合成（原图+背景）→ 本地 rembg → 图生图
+  - `compose_bg.py` 用 pymatting 去污，失败时保留 rembg 掩膜
+  - Rust 图像模型对齐 `agnes-image-2.5-flash`
 
 - **v0.1.7** (2026-09) AI 视频可靠性与一致性
   - 修复视频任务过早过期：GC 依据从创建时间改为完成时间，运行中 2 小时兜底，完成后保留 2 小时（Go + Rust 双端）
