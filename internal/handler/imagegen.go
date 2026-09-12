@@ -3,7 +3,9 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"image"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -151,22 +153,27 @@ func (h *ImageGenH) HandleEditImage(w http.ResponseWriter, r *http.Request) {
 	out.Close()
 
 	size := r.FormValue("size")
-	var width, height int
-	switch size {
-	case "1k":
-		width, height = 1024, 1024
-	case "2k":
-		width, height = 1792, 1024
-	case "4k":
-		width, height = 2048, 2048
+
+	// 读取上传原图尺寸，换背景时按原图比例做 letterbox（留白不拉伸），避免主体变形
+	var origW, origH int
+	if f, err := os.Open(srcPath); err == nil {
+		if cfg, _, cerr := image.DecodeConfig(f); cerr != nil {
+			log.Printf("[edit] 读取原图尺寸失败: %v (file=%s)", cerr, srcPath)
+		} else {
+			origW, origH = cfg.Width, cfg.Height
+		}
+		f.Close()
+	} else {
+		log.Printf("[edit] 打开原图失败: %v", err)
 	}
 
 	var dest string
 	if h.AI != nil {
-		dest, err = service.MakeEditedImageAI(h.AI, tmp, srcPath, prompt, width, height)
+		dest, err = service.MakeEditedImageComposed(h.AI, tmp, srcPath, prompt, size, origW, origH)
 	}
 	if dest == "" || err != nil {
-		dest, err = service.MakeEditedImage(tmp, srcPath, prompt, width, height)
+		// 本地降级：width/height=0 表示跟随原图尺寸与比例
+		dest, err = service.MakeEditedImage(tmp, srcPath, prompt, 0, 0)
 		if err != nil {
 			h.safeErr(w, err)
 			return

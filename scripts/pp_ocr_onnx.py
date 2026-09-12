@@ -7,8 +7,8 @@
 
 PP-OCR 分支使用 models/ocr 下同一来源下载的配套文件:
   det.onnx = ch_PP-OCRv4_det_infer.onnx
-  rec.onnx = ch_PP-OCRv4_rec_infer.onnx (字符表内嵌在模型元数据里, 与字典严格匹配)
-  ppocr_keys_v1.txt 仅作元数据缺失时的兜底。
+  rec.onnx = PP-OCRv6_small_rec (多语言, 18710 通道, 字符表从 ppocr_keys_v6.txt 读取)
+  ppocr_keys_v1.txt 为 v4 字典兜底；ppocr_keys_v6.txt 为 v6 字典兜底。
 
 使用:
   from pp_ocr_onnx import ocr_image, ocr_pdf, get_available_engine, ppocr_recognize
@@ -30,8 +30,9 @@ DEFAULT_LANG = "chi_sim+eng"
 
 MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", "ocr")
 DET_PATH = os.path.join(MODEL_DIR, "det.onnx")
-REC_PATH = os.path.join(MODEL_DIR, "rec.onnx")
+REC_PATH = os.path.join(MODEL_DIR, "v6_rec.onnx")
 KEYS_PATH = os.path.join(MODEL_DIR, "ppocr_keys_v1.txt")
+KEYS_V6_PATH = os.path.join(MODEL_DIR, "ppocr_keys_v6.txt")
 
 # 与 RapidOCR / PaddleOCR v4 官方 config.yaml 一致的参数
 DET_LIMIT_SIDE_LEN = 736
@@ -144,8 +145,11 @@ def _read_character_list(rec_session) -> List[str]:
         items = [line for line in chars.splitlines()]
         if items:
             return items
-    if os.path.exists(KEYS_PATH):
-        with open(KEYS_PATH, "r", encoding="utf-8") as f:
+    # 无内嵌字符表（v6 多语言模型），按输出通道选择对应字典文件。
+    channels = rec_session.get_outputs()[0].shape[-1]
+    keys_file = KEYS_V6_PATH if channels > 10000 else KEYS_PATH
+    if os.path.exists(keys_file):
+        with open(keys_file, "r", encoding="utf-8") as f:
             return [line.rstrip("\r\n") for line in f]
     raise RuntimeError("PP-OCR 字符字典缺失")
 
@@ -420,14 +424,21 @@ def _ctc_decode_topk(logits: "np.ndarray", table: List[str], topk: int = 6):
 def ppocr_rec_line_chars(crop, topk: int = 6):
     """识别单行文本条带，返回逐字符 (char, conf, candidates)。
 
-    crop 为 BGR 或灰度 numpy 数组；供 CJK 行路由做通用纠错。
+    crop 为 BGR 或灰度 numpy 数组；供 CJK 行路由做通用纠错。默认 v6 多语言模型。
     """
+    import numpy as np  # noqa: F401
+
+    _, rec, table = _ppocr_sessions()
+    return _rec_line_chars(crop, rec, table, topk)
+
+
+def _rec_line_chars(crop, rec, table, topk: int = 6):
+    """通用单行识别：bgr 归一化 → rec 推理 → CTC top-K 解码。"""
     import numpy as np  # noqa: F401
 
     bgr = _to_bgr(crop)
     if bgr.size == 0 or bgr.shape[1] < 2 or bgr.shape[0] < 2:
         return []
-    _, rec, table = _ppocr_sessions()
     max_wh_ratio = max(REC_IMG_SHAPE[2] / float(REC_IMG_SHAPE[1]),
                        bgr.shape[1] * 1.0 / bgr.shape[0])
     blob = _rec_transform([bgr], max_wh_ratio)
@@ -436,7 +447,7 @@ def ppocr_rec_line_chars(crop, topk: int = 6):
 
 
 def ppocr_recognize(image, text_score: float = REC_SCORE) -> List[dict]:
-    """PP-OCRv4 det+rec 全流程，返回 [{'text','score','box': [x,y,w,h]}]。"""
+    """PP-OCR det(v4)+rec(v6) 全流程，返回 [{'text','score','box': [x,y,w,h]}]。"""
     import cv2  # noqa: F401
     import numpy as np  # noqa: F401
 

@@ -516,7 +516,7 @@ func validateDownloadURL(raw string) error {
 		return fmt.Errorf("URL 缺少 host")
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
+		if isBlockedIP(ip) {
 			return fmt.Errorf("禁止下载内网/回环地址资源")
 		}
 	}

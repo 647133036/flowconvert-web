@@ -338,7 +338,7 @@
       </div>
       <p>上传原始图像</p>
       <p class="hint">支持 JPG / PNG / WebP</p>
-      <input type="file" id="editFileInput" accept=".jpg,.jpeg,.png,.webp" hidden>
+      <input type="file" id="editFileInput" accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.tiff,.tif" hidden>
     </div>
 
     <div class="param-group">
@@ -349,10 +349,10 @@
     <div class="param-group">
       <label>输出尺寸</label>
       <select id="editSize" class="select">
-        <option value="original">保持原尺寸</option>
-        <option value="1k">1K (1024×1024)</option>
-        <option value="2k">2K (1792×1024)</option>
-        <option value="4k">4K (2048×2048)</option>
+        <option value="original">保持原尺寸（推荐）</option>
+        <option value="1k">1K 清晰度（比例跟随原图）</option>
+        <option value="2k">2K 清晰度（比例跟随原图）</option>
+        <option value="4k">4K 清晰度（比例跟随原图）</option>
       </select>
     </div>
 
@@ -365,19 +365,19 @@
       <label>参考图像（可选，最多4张）</label>
       <div class="ref-grid">
         <div class="ref-card" id="refCard1">
-          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="0">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.tiff,.tif" hidden data-index="0">
           <span class="ref-label">参考1</span>
         </div>
         <div class="ref-card" id="refCard2">
-          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="1">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.tiff,.tif" hidden data-index="1">
           <span class="ref-label">参考2</span>
         </div>
         <div class="ref-card" id="refCard3">
-          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="2">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.tiff,.tif" hidden data-index="2">
           <span class="ref-label">参考3</span>
         </div>
         <div class="ref-card" id="refCard4">
-          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="3">
+          <input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.tiff,.tif" hidden data-index="3">
           <span class="ref-label">参考4</span>
         </div>
       </div>
@@ -567,7 +567,7 @@ function handleEditFile(file) {
   const reader = new FileReader();
   reader.onload = e => {
     $('editUpload').classList.add('has-image');
-    $('editUpload').innerHTML = `<img src="${e.target.result}"><input type="file" id="editFileInput" accept=".jpg,.jpeg,.png,.webp" hidden>`;
+    $('editUpload').innerHTML = `<img src="${e.target.result}"><input type="file" id="editFileInput" accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.tiff,.tif" hidden>`;
     $('editFileInput').addEventListener('change', ev => {
       if (ev.target.files.length > 0) handleEditFile(ev.target.files[0]);
     });
@@ -587,7 +587,7 @@ function handleRefUpload(e) {
     card.classList.add('has-image');
     // Rebuild card keeping the file input with its data-index so the click &
     // change delegates (bound on .ref-grid) keep working for re-uploads.
-    card.innerHTML = '<img src="' + ev.target.result + '"><input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="' + idx + '"><span class="ref-label">' + (idx + 1) + '</span>';
+    card.innerHTML = '<img src="' + ev.target.result + '"><input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.tiff,.tif" hidden data-index="' + idx + '"><span class="ref-label">' + (idx + 1) + '</span>';
   };
   reader.readAsDataURL(file);
   const cp = $('composePrompt');
@@ -742,7 +742,7 @@ function resetAll() {
     </div>
     <p>上传原始图像</p>
     <p class="hint">支持 JPG / PNG / WebP</p>
-    <input type="file" id="editFileInput" accept=".jpg,.jpeg,.png,.webp" hidden>
+    <input type="file" id="editFileInput" accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.tiff,.tif" hidden>
   `;
   $('editFileInput').addEventListener('change', e => {
     if (e.target.files.length > 0) handleEditFile(e.target.files[0]);
@@ -753,7 +753,7 @@ function resetAll() {
   for (let i = 1; i <= 4; i++) {
     const card = document.getElementById('refCard' + i);
     card.classList.remove('has-image');
-    card.innerHTML = `<input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp" hidden data-index="${i-1}"><span class="ref-label">参考${i}</span>`;
+    card.innerHTML = `<input type="file" class="ref-input" accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.tiff,.tif" hidden data-index="${i-1}"><span class="ref-label">参考${i}</span>`;
   }
   
   // Reset buttons

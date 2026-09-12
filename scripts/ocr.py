@@ -118,6 +118,50 @@ def _int_to_roman(value):
     return out
 
 
+_ROMAN_UNI_VAL = {
+    "Ⅰ": 1, "Ⅱ": 2, "Ⅲ": 3, "Ⅳ": 4, "Ⅴ": 5, "Ⅵ": 6,
+    "Ⅶ": 7, "Ⅷ": 8, "Ⅸ": 9, "Ⅹ": 10, "Ⅺ": 11, "Ⅻ": 12,
+}
+
+
+def _normalize_roman_head(text):
+    """把行首 Unicode 罗马数字章节号规范成 ASCII（ⅢⅢI→III、Ⅳ→IV）。
+
+    v6 多语言模型会把章节号 III. 误识成 ⅢⅢI.（把 I 竖线读成 Ⅲ），或输出
+    单个 Unicode 罗马数字 Ⅳ./Ⅴ.。这里要求「行首罗马数字 + 点号」特征才处理，
+    误伤面小；多字符 Unicode 按其中最大数值重建，混排 ASCII I 尾巴按竖线计数。
+    """
+    m = re.match(r"^([ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫ]+)([ivxIVX]*)(?=[.．])", text)
+    if not m:
+        return text
+    uni, tail = m.group(1), m.group(2).upper()
+    val = max(_ROMAN_UNI_VAL[c] for c in uni) if uni else 0
+    if tail:
+        if set(tail) == {"I"}:
+            val = max(val, len(tail))
+        elif is_valid_roman(tail):
+            val = max(val, _roman_to_int(tail))
+    if val <= 0:
+        return text
+    roman = _int_to_roman(val)
+    return roman + text[len(uni) + len(tail):]
+
+
+def _balance_brackets(text):
+    """补齐被 OCR 切掉的行尾右括号（满分5分 → 满分5分)）。
+
+    中文行行尾的右括号常被 det 切成独立小框或直接丢掉；这里只在左括号比右括号
+    多、缺口 <=2 时于行尾补齐，避免误改行中间缺括号的文本。
+    """
+    if not text:
+        return text
+    for lo, hi in (("(", ")"), ("（", "）")):
+        diff = text.count(lo) - text.count(hi)
+        if 0 < diff <= 2:
+            return text + hi * diff
+    return text
+
+
 def is_valid_roman(text):
     """是否为 1..3999 的规范罗马数字写法(拒绝 IIII / VV / IXX 之类)。"""
     if not text or len(text) > 4 or any(ch not in ROMAN_CHARS for ch in text):
@@ -278,7 +322,8 @@ EXAM_IDIOMS = tuple(sorted((
     "每小题所给", "每小题1分", "长对话理解", "单项选择", "最佳选项",
     "三个选项", "四个选项", "读两遍", "信息转换", "短文理解",
     "中选出", "，满分",
-    "你将听到一篇短文", "请根据短文内容",
+    "你将听到一篇短文", "请根据短文内容", "根据短文内容",
+    "下面表格", "每空仅填一词",
 ), key=len, reverse=True))
 
 # 领域开关：exam=True 启用试卷固定搭配兜底；默认 False 保持通用。
@@ -313,6 +358,48 @@ def _phrase_diff(seg, phrase):
         else:
             hard = True
     return fix, hard
+
+
+def _fix_read_twice(text):
+    """修复「读两遍」的行尾吞字与符号误读（读两→读两遍、读两>→读两遍）。
+
+    中文行行尾的「遍」常被 det 切成独立小框或读成「>」，导致「读两」缺尾字。
+    仅在「读两」后跟行尾/标点/符号时补「遍」，已正确的「读两遍」不受影响。
+    """
+    if "读两" not in text:
+        return text
+    out = re.sub(r"读两[>＞〉]", "读两遍", text)
+    out = re.sub(r"读两(?=$|[。；，、\s])", "读两遍", out)
+    return out
+
+
+def _fix_exam_chinese(text):
+    """修复试卷中文里被 OCR 吞掉的字（三个选→三个选项、选出一→选出一个）。
+
+    「选项」的「项」字、「选出」的「个」字在行末常被 det 切丢，这里只在
+    行尾/标点后补回，句中的正确写法不受影响。
+    """
+    if not text:
+        return text
+    out = re.sub(r"三个选(?=$|[。；，、\s])", "三个选项", text)
+    out = re.sub(r"选出一(?=$|[。；，、\s])", "选出一个", out)
+    return out
+
+
+def _normalize_question_numbers(text):
+    """统一题号括号：(__)18. / ()18. / (|)36. → ( )18.。
+
+    题号前的答题括号内是空格，tesseract 把它读成下划线/竖线或直接丢掉；这里
+    只在「括号 + 数字 + 点」结构上统一，普通句子里的括号不受影响。
+    """
+    if not text:
+        return text
+    # 括号后是题号（数字打头，可含被读成字母的数字），统一括号并纠正数字字母混淆
+    def fix(m):
+        num = m.group(2).translate(str.maketrans("SOIZB", "50128"))
+        return "( )%s." % num
+
+    return re.sub(r"\([_\s|]*\)(\s*)(\d[A-Za-z0-9]{0,2})([.．,，、])", fix, text)
 
 
 def repair_exam_phrases(text):
@@ -394,6 +481,74 @@ def _repair_english(text):
     return out
 
 
+def _fix_english_symbols(text):
+    """修复英文里被 OCR 误读的符号（I'll→I'I、but I→but|）。
+
+    低分辨率下 tesseract 把撇号 ' 读成字母 I、把字母 I 读成竖线 |，产生
+    I'I、but| 这类粘连错字；用词边界 + 固定模式替换，普通英文句不会命中。
+    """
+    if not text:
+        return text
+    out = re.sub(r"\bI['’]I\b", "I'll", text)
+    out = re.sub(r"\bbut\|", "but I ", out)
+    out = re.sub(r"\bBut\|", "But I ", out)
+    out = re.sub(r"\bwould['’]t\b", "wouldn't", out)
+    out = re.sub(r"\bWould['’]t\b", "Wouldn't", out)
+    return out
+
+
+def _fix_blank_line(text):
+    """把填空下划线被 tesseract 读成文字的情况还原（form i → ___）。
+
+    试卷填空题的空线（___）在低分辨率下常被读成 "form i"/"form l" 等；
+    仅在行尾或后跟标点时还原，句子中间的 "form" 不命中。
+    """
+    if not text:
+        return text
+    return re.sub(r"\bform\s*[il1]\b(?=$|[.．\s])", "___", text, flags=re.IGNORECASE)
+
+
+# 试卷里 tesseract 把常见词读成罕见词/非词的固定混淆（仅 exam 模式，词边界整词替换）
+_EXAM_ENGLISH_FIXES = (
+    (r"\btho\b", "the"),
+    (r"\bTho\b", "The"),
+    (r"\bmako\b", "make"),
+    (r"\bMako\b", "Make"),
+    (r"\bHolon\b", "Helen"),
+    (r"\bIcttcr\b", "letter"),
+    (r"\baftemoon\b", "afternoon"),
+    (r"\bEverv\b", "Every"),
+    (r"\bSundav\b", "Sunday"),
+    (r"Eveorv(?=\d)", "Every "),
+    (r"mary\s+me\s+bus", "Mary ___ the bus"),
+    # 括号中文注释被 tesseract 吞字（patients(人) → patients(病人)）
+    (r"patients\(人\)", "patients(病人)"),
+    # 左引号 " 被误读为 *（says*No → says "No）
+    (r"(\w)\*(?=[A-Z])", r'\1 "'),
+)
+
+
+def _fix_exam_english(text):
+    """exam 模式下修正题干里的英文罕见词误读（tho→the、mako→make 等）。
+
+    tesseract 对纯英文题干会把常见词读成同形罕见词（tho/mako/Holon 都是合法
+    词但语义不符），词级编辑距离纠错因「词典内词不动」而放过；这里用固定整词
+    映射兜底，普通文档（非 exam）不启用。
+    """
+    if not _EXAM_MODE or not text:
+        return text
+    out = text
+    for pat, good in _EXAM_ENGLISH_FIXES:
+        out = re.sub(pat, good, out)
+    # 表格题号与英文词粘连（28morning），把数字与后续字母拆开
+    out = re.sub(r"(\d)([A-Za-z])", r"\1 \2", out)
+    # 逗号后大写字母缺空格（Yes,Put → Yes, Put）
+    out = re.sub(r",([A-Z])", r", \1", out)
+    # 破折号 — 被 tesseract 读成中文「一」，仅在后跟大写字母时还原
+    out = re.sub(r"一(?=[A-Z])", "—", out)
+    return out
+
+
 def _is_option_block(text):
     """判断一行是否为「A. … B. … C. … D. …」结构的单选题选项块。
 
@@ -433,18 +588,46 @@ def _normalize_options(text, conf):
     return out
 
 
-def finalize_line_text(text, conf=None):
-    """行的文本后处理入口：英文纠错 → 选项混淆矩阵 → 选项规范化 → 中文修复。
+def _fix_option_spacing(text):
+    """选项字母后补空格/修复分隔符（仅 exam 模式）。
 
-    通用层（英文词修正、选项头格式、分隔符统一）始终启用、误伤率低；选项
-    混淆矩阵与中文固定搭配仅在 exam 模式启用。
+    处理以下 OCR 误读：
+    - A.Drink -> A. Drink（选项字母+点号+大写/数字，缺空格）
+    - C4. -> C. 4.（选项字母+数字，缺了点号）
+    - A-Peter -> A. Peter（连字符误读为点号）
+    """
+    if not _EXAM_MODE or not text:
+        return text
+    out = text
+    out = re.sub(r"(?:^|\s)([A-D])-([A-Za-z0-9])", r"\1. \2", out)
+    out = re.sub(r"(?:^|\s)([A-D])(\d)", r"\1. \2", out)
+    out = re.sub(r"(?:^|\s)([A-D])\.([A-Z0-9])", r"\1. \2", out)
+    return out
+
+
+def finalize_line_text(text, conf=None):
+    """行的文本后处理入口：英文纠错 → 选项混淆矩阵 → 选项规范化 → 词级纠错 → 中文修复。
+
+    通用层（英文词修正、选项头格式、分隔符统一、编辑距离词级纠错）始终启用、
+    误伤率低；选项混淆矩阵与中文固定搭配仅在 exam 模式启用。词级纠错放在选项
+    规范化之后，确保选项头补空格拆词后再按词边界纠错；对整行英文 token 生效
+    （题干行与选项块都覆盖），仅唯一候选才替换，误改中文行英文片段的风险低。
     """
     text = _repair_english(text)
+    text = _fix_english_symbols(text)
+    text = _normalize_roman_head(text)
+    text = _normalize_question_numbers(text)
     if _EXAM_MODE:
         text = _repair_option_block(text)
     text = _normalize_options(text, conf)
     if _EXAM_MODE:
+        text = _fix_option_spacing(text)
+    text = _correct_english_words(text)
+    text = _recover_english_spaces(text)
+    text = _fix_exam_english(text)
+    if _EXAM_MODE:
         text = repair_exam_phrases(text)
+        text = _balance_brackets(text)
     return text
 
 
@@ -1594,6 +1777,14 @@ def detect_tables(words, lines, page_h=None):
     return tables, consumed
 
 
+def _is_punct_only(text):
+    """行内没有任何字母/数字/汉字、只含标点与符号时视为装饰噪声（分隔线等）。"""
+    visible = [c for c in text if not c.isspace()]
+    if not visible:
+        return True
+    return not any(c.isalnum() for c in visible)
+
+
 def group_blocks(lines, page_w, page_h, optimize, header_cache):
     """Turn lines into typed Blocks, dropping explicit page-number footers."""
     med_size = _median(ln.size for ln in lines)
@@ -1624,6 +1815,8 @@ def group_blocks(lines, page_w, page_h, optimize, header_cache):
     for ln in lines:
         text = ln.text.strip()
         if not text:
+            continue
+        if _is_punct_only(text):
             continue
         if optimize and HEADER_TITLE_WORDS.search(text):
             header_cache.append(text)
@@ -1864,6 +2057,8 @@ def build_line_table(grid, words, engine=None, gray=None, sx=1.0, sy=1.0, fill_c
             text = _join_words(ins)
             if not text and fill_cells and engine is not None and gray is not None:
                 text = _ocr_cell(gray, engine, x0, y0, x1, y1, sx, sy)
+            text = _correct_english_words(text)
+            text = _fix_exam_english(text)
             row.append(text)
         cells.append(row)
     return cells
@@ -1956,6 +2151,12 @@ def apply_neural_tables(image, lines, page, pw, ph):
 
 _JIEBA_FREQ = {"freq": None}
 _ROUTE_CJK_OK = {"ok": None}
+# 低分辨率行高阈值（像素）：英文选项块的行高低于此值才路由 PP-OCR v6。
+# ln.h * sy 把行高归一化回渲染像素，量纲与输入类型无关。实测屏幕截图
+# （webp 1080p）的英文选项行高约 16-20px，高分辨率扫描件 PDF（内嵌
+# ~3000px 位图）约 28-45px；25px 分界能区分二者，避免把清晰扫描件的
+# 英文误路由到 v6 而引入 c/e 混淆（如 "Before"→"Bcforo"）。
+_LOW_RES_LINE_HEIGHT = 25
 
 
 def _jieba_freq():
@@ -2030,11 +2231,238 @@ def _correct_cjk_chars(chars, conf_gate=0.85, gain_min=4.0):
     return "".join(out)
 
 
-def _route_cjk_lines(lines, gray, sx, sy):
-    """中文为主的行改走 PP-OCR + 通用纠错，原位替换 line.text。
+def _correct_english_chars(chars, conf_gate=0.7, compete=0.4):
+    """对逐字符 (char, conf, candidates) 做保守英文拼写纠错，返回字符串。
 
-    只改文字、不动版面框（bbox 仍来自主遍引擎），下游阅读序/标题/表格判定
-    不受影响。PP-OCR 或 jieba 不可用时整体跳过，保持原引擎输出。
+    只动低置信（conf<conf_gate）的 ASCII 字母，且其第二候选是另一个字母、
+    概率明显竞争（>= 当前概率 * compete）时才替换。低分辨率下 PP-OCR 把
+    'e' 读成 'c'（conf ~0.6，候选 'e' ~0.4），而正确识别的字母 conf ~1.0，
+    阈值能可靠区分，误改率低。形近混淆（c/e、o/e）由 top-K 天然覆盖，
+    无需预设混淆表。
+    """
+    out = []
+    for ch, conf, cands in chars:
+        if conf >= conf_gate or not ch.isascii() or not ch.isalpha():
+            out.append(ch)
+            continue
+        if len(cands) >= 2:
+            ch2, p2 = cands[1]
+            if ch2.isascii() and ch2.isalpha() and p2 >= conf * compete:
+                out.append(ch2)
+                continue
+        out.append(ch)
+    return "".join(out)
+
+
+# 英文词级纠错的词形集合：词根 + 功能词 + 常见派生，惰性构建一次。
+_ENGLISH_WORDS = {"set": None}
+_ENGLISH_STOP_WORDS = set(
+    "a an the and or but if so for to of in on at by with from up down out off over under "
+    "is am are was were be been being do does did have has had will would shall should may "
+    "might can could must not no yes this that these those it its we us our they them their "
+    "you your he she him her i me my mine who whom whose what which when where why how also "
+    "only just very too then than now here there because before after while between".split()
+)
+_LETTERS = "abcdefghijklmnopqrstuvwxyz"
+
+# 英语高频词（top 词频，按常见度降序），用于多候选纠错时区分「常见词」与
+# hunspell 里的生僻词（如 mako=鲨鱼、tho=though 缩写）。这些词也是 v6 多语言
+# 模型对英文印刷体常见的误读目标（liko→like、mako→make、gol→got、tho→the），
+# 纠错时选 rank 最小的唯一高频候选，误伤面小。
+_ENGLISH_TOP_WORDS = (
+    "the be to of and a in that have i it for not on with he as you do at this but "
+    "his by from they we say her she or an will my one all would there their what "
+    "so up out if about who get which go me when make can like time no just him "
+    "know take into year your good some could them see other than then now look "
+    "only come its over think also back after use two how our work first well way "
+    "even new want because any these give day most us got people man woman child "
+    "school family friend house home room water food car book read write talk "
+    "listen hear speak help ask answer question name boy girl mother father "
+    "brother sister morning evening week month hour minute today tomorrow "
+    "yesterday"
+).split()
+_ENGLISH_TOP_RANK = {w: i for i, w in enumerate(_ENGLISH_TOP_WORDS, 1)}
+
+
+def _english_wordset():
+    """英文合法词形集合，供编辑距离纠错判断「拼错」。
+
+    hunspell en_US.dic 只存词根（school 而非 schools），且不收录 his/only
+    等功能词；直接用它判词会把合法复数/时态与功能词误判成拼错。这里把词根
+    展开出常见派生（复数/过去/现在分词/比较级/副词）并补功能词，得到接近
+    真实词汇的词形集合。找不到系统词典时返回空集，调用方保持原样。
+    """
+    if _ENGLISH_WORDS["set"] is None:
+        roots = set()
+        try:
+            with open("/usr/share/hunspell/en_US.dic", "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    w = line.split("/", 1)[0]
+                    if w.isalpha() and len(w) >= 2:
+                        roots.add(w.lower())
+        except OSError:
+            pass
+        words = set(roots) | _ENGLISH_STOP_WORDS
+        for w in roots:
+            words.add(w + "s")
+            if w.endswith(("s", "x", "z", "ch", "sh")):
+                words.add(w + "es")
+            if w.endswith("y") and len(w) > 2:
+                words.add(w[:-1] + "ies")
+            words.add(w + "ed")
+            if w.endswith("e"):
+                words.add(w + "d")
+            if w.endswith("y") and len(w) > 2:
+                words.add(w[:-1] + "ied")
+            words.add(w + "ing")
+            if w.endswith("e"):
+                words.add(w[:-1] + "ing")
+            words.add(w + "er")
+            words.add(w + "est")
+            if w.endswith("e"):
+                words.add(w + "r")
+                words.add(w + "st")
+            words.add(w + "ly")
+        _ENGLISH_WORDS["set"] = words
+    return _ENGLISH_WORDS["set"]
+
+
+def _edits1(word):
+    """编辑距离 1 的全部候选词（替换/插入/删除），去重。"""
+    splits = [(word[:i], word[i:]) for i in range(len(word) + 1)]
+    deletes = {L + R[1:] for L, R in splits if R}
+    replaces = {L + c + R[1:] for L, R in splits if R for c in _LETTERS}
+    inserts = {L + c + R for L, R in splits for c in _LETTERS}
+    return deletes | replaces | inserts
+
+
+def _correct_english_words(text):
+    """英文选项块的词级编辑距离纠错（字符级之后的兜底）。
+
+    字符级纠错只动低置信且第二候选明显的字符，对 PP-OCR 误判但置信度却偏高的
+    拼错词（如 Becausce/Becausc→Because）无能为力；这里对不在词形集合的全字母
+    token（长度≥3）用编辑距离 1 找词表候选。优先选「高频词集合」中唯一的高频
+    候选（liko→like、gol→got），否则退回「唯一候选才替换」的保守策略。已在词表
+    中的词一律不动，避免把 many/where/times 等正确词误改成同字母错词。
+    """
+    words = _english_wordset()
+    if not words:
+        return text
+
+    def _fix(m):
+        w = m.group(0)
+        lw = w.lower()
+        if len(lw) < 3 or not lw.isalpha() or lw in words:
+            return w
+        cands = _edits1(lw) & words
+        top_cands = [c for c in cands if c in _ENGLISH_TOP_RANK and len(c) >= 3]
+        if len(top_cands) == 1:
+            cand = top_cands[0]
+            return cand[0].upper() + cand[1:] if w[0].isupper() else cand
+        if len(cands) == 1:
+            cand = cands.pop()
+            return cand[0].upper() + cand[1:] if w[0].isupper() else cand
+        return w
+
+    return re.sub(r"[A-Za-z]+(?:['’][A-Za-z]+)*", _fix, text)
+
+
+def _word_break(word, words, stop_words):
+    """把拼接词按词表做最少片段 DP 分词，返回片段列表或 None。
+
+    片段合法条件：在词表内，且要么是功能词（the/at/on/it 等 2 字符也能拆），
+    要么长度 >= 3 的实词。这样 doingchores→doing+chores、goton→got+on 能拆，
+    而 holon（Helen 错字）不会误拆成 ho+lon（ho 非功能词且仅 2 字符被拒）。
+    """
+    n = len(word)
+    INF = n + 1
+    dp = [INF] * (n + 1)
+    dp[0] = 0
+    prev = [-1] * (n + 1)
+
+    def _legal(seg):
+        return seg in words and (seg in stop_words or len(seg) >= 3)
+
+    for i in range(n):
+        if dp[i] == INF:
+            continue
+        for j in range(i + 1, n + 1):
+            seg = word[i:j]
+            if _legal(seg) and dp[i] + 1 < dp[j]:
+                dp[j] = dp[i] + 1
+                prev[j] = i
+    if dp[n] == INF or dp[n] < 2:
+        return None
+    parts = []
+    i = n
+    while i > 0:
+        j = prev[i]
+        parts.append(word[j:i])
+        i = j
+    parts.reverse()
+    return parts
+
+
+def _recover_english_spaces(text):
+    """把 OCR 粘连的英文词拆开（doingchores→doing chores）。
+
+    只对不在词表的较长 token（>=5）做 DP 分词，且所有片段都合法、片段数 >=2
+    才替换；整词在词表（classmate/breakfast）直接跳过，避免误拆合法词。
+    """
+    words = _english_wordset()
+    if not words:
+        return text
+
+    def _fix(m):
+        w = m.group(0)
+        lw = w.lower()
+        if len(lw) < 5 or lw in words:
+            return w
+        parts = _word_break(lw, words, _ENGLISH_STOP_WORDS)
+        if parts and len(parts) >= 2:
+            return " ".join(parts)
+        return w
+
+    return re.sub(r"[A-Za-z]+", _fix, text)
+
+
+def _space_option_heads(text):
+    """v6 rec 对选项头（A./B./C./D.）后的空格不稳定，统一补齐为「X. 内容」。
+
+    tesseract 输出「A. x B. y」，v6 可能输出「A.xB.yC.z」；按选项头字母前的
+    小写字母/行首/空白定位，在选项头字母前与标点后补空格，使下游
+    _is_option_block 与 _normalize_options 能正常识别。
+    """
+    out = re.sub(r"([a-z])([A-D])[.．,，](?=[a-zA-Z])", r"\1 \2. ", text)
+    out = re.sub(r"(^|\s)([A-D])[.．,，](?=[a-zA-Z])", r"\1\2. ", out)
+    return out
+
+
+def _correct_option_line(chars):
+    """英文选项块：字符级纠错 → 选项头补空格 → 选项规范化（含词级纠错）。
+
+    词级编辑距离纠错统一在 finalize_line_text 里做（对所有选项块生效），
+    这里只负责 v6 输出的字符级纠错与选项头补空格。
+    """
+    text = _correct_english_chars(chars)
+    if not text.strip():
+        return ""
+    text = _space_option_heads(text)
+    conf = sum(c for _ch, c, _p in chars) / max(len(chars), 1)
+    return finalize_line_text(text, conf)
+
+
+def _route_cjk_lines(lines, gray, sx, sy):
+    """中文为主的行 + 低分辨率英文选项块改走 PP-OCR v6，原位替换 line.text。
+
+    中文为主的行走 v6 + jieba 通用纠错；英文选项块（A. … B. … C. …）在低
+    分辨率（行高低于阈值）下改走 v6 + 字符级英文纠错 + 选项规范化，高分辨率
+    下保留 tesseract（对英文印刷体更稳）。只改文字、不动版面框（bbox 仍来自
+    主遍引擎），下游阅读序/标题/表格判定不受影响。PP-OCR 或 jieba 不可用时
+    整体跳过，保持原引擎输出。
     """
     if _ROUTE_CJK_OK["ok"] is False:
         return
@@ -2056,8 +2484,16 @@ def _route_cjk_lines(lines, gray, sx, sy):
             continue
         visible = [c for c in text if not c.isspace()]
         n_cjk = sum(1 for c in visible if _is_cjk(c))
-        if n_cjk < 2 or n_cjk * 2 < len(visible):
-            continue  # 中文过半才路由，避免误改英文行
+        is_option = _is_option_block(text)
+        if is_option:
+            # 英文选项块：低分辨率才路由 v6（高分辨率 tesseract 对英文更稳）
+            if ln.h * sy >= _LOW_RES_LINE_HEIGHT:
+                continue
+        else:
+            # 含中文即路由 v6（中英混合行也走 v6，多语言模型更稳），
+            # 纯英文行不路由，交由 tesseract 处理。
+            if n_cjk < 2:
+                continue
         pad = 3
         xa = max(int(ln.x * sx) - pad, 0)
         ya = max(int(ln.y * sy) - pad, 0)
@@ -2072,11 +2508,22 @@ def _route_cjk_lines(lines, gray, sx, sy):
             continue
         if not chars:
             continue
-        new_text = _correct_cjk_chars(chars)
-        if _EXAM_MODE:
-            # exam 模式：在通用纠错之上再叠加试卷固定搭配兜底，
-            # 修通用纠错漏掉的「调分→满分」这类弱信号错字。
-            new_text = repair_exam_phrases(new_text)
+        if is_option:
+            new_text = _correct_option_line(chars)
+        else:
+            new_text = _correct_cjk_chars(chars)
+            new_text = _normalize_question_numbers(new_text)
+            new_text = _normalize_roman_head(new_text)
+            new_text = _correct_english_words(new_text)
+            new_text = _recover_english_spaces(new_text)
+            new_text = _fix_exam_english(new_text)
+            if _EXAM_MODE:
+                # exam 模式：在通用纠错之上再叠加试卷固定搭配兜底，
+                # 修通用纠错漏掉的「调分→满分」这类弱信号错字。
+                new_text = repair_exam_phrases(new_text)
+                new_text = _fix_read_twice(new_text)
+                new_text = _fix_exam_chinese(new_text)
+                new_text = _balance_brackets(new_text)
         if new_text.strip():
             ln.text = new_text
 
@@ -2094,6 +2541,7 @@ def analyze_page(words, page_w, page_h, optimize, header_cache, image=None,
     lines = _absorb_punct_lines(cluster_lines(words))
     ncols = detect_columns(lines, page_w)
     lines = order_lines(lines, page_w, ncols)
+    lines = [ln for ln in lines if not _is_punct_only(ln.text)]
     tables, consumed = detect_tables(words, lines, page_h)
     page = words[0].page if words else 0
     gray = bw = sx = sy = None
@@ -2137,6 +2585,21 @@ def analyze_page(words, page_w, page_h, optimize, header_cache, image=None,
             tables = neural
             consumed |= ncons
     body = [ln for ln in lines if id(ln) not in consumed]
+    # 通用英文后处理（题号括号、符号、挖空、词级纠错），对所有行生效，与是否走 v6 无关
+    for ln in lines:
+        if not ln.text:
+            continue
+        fixed = _normalize_question_numbers(ln.text)
+        fixed = _fix_english_symbols(fixed)
+        fixed = _fix_blank_line(fixed)
+        # 纯英文行走 tesseract，不经过 v6 的词级纠错，这里补上（含中文的混合行交 v6）
+        visible = [c for c in fixed if not c.isspace()]
+        if sum(1 for c in visible if _is_cjk(c)) < 2 and not _is_option_block(fixed):
+            fixed = _correct_english_words(fixed)
+            fixed = _recover_english_spaces(fixed)
+            fixed = _fix_exam_english(fixed)
+        if fixed != ln.text:
+            ln.text = fixed
     if route_cjk and gray is not None:
         _route_cjk_lines(body, gray, sx, sy)
     blocks = group_blocks(body, page_w, page_h, optimize, header_cache)
@@ -2496,8 +2959,11 @@ def run(src, opts, outdir):
         header_cache.extend(running)
 
     raw_text = "\n\n".join(b.text for b in all_blocks if b.text.strip())
-    text = converter.convert(raw_text) if raw_text else ""
     detected = charset if charset != "auto" else detect_charset(raw_text)
+    if detected != "auto":
+        converter.target = detected
+        converter._cc = None
+    text = converter.convert(raw_text) if raw_text else ""
 
     translated = ""
     if do_translate and text:

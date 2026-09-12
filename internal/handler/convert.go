@@ -373,6 +373,7 @@ func (c *ConvertH) HandleIdPhoto(w http.ResponseWriter, r *http.Request) {
 
 	size := r.FormValue("size")
 	bg := r.FormValue("bg_color")
+	hiRes := r.FormValue("hi_res") == "1" || strings.ToLower(r.FormValue("hi_res")) == "true"
 
 	tmp, err := c.newTmp()
 	if err != nil {
@@ -381,7 +382,7 @@ func (c *ConvertH) HandleIdPhoto(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.cleanupTmp(tmp)
 
-	dest, err := service.MakeIdPhoto(tmp, src, size, bg)
+	dest, err := service.MakeIdPhoto(tmp, src, size, bg, hiRes)
 	if err != nil {
 		c.safeErr(w, err)
 		return
@@ -394,8 +395,8 @@ func (c *ConvertH) HandleIdPhoto(w http.ResponseWriter, r *http.Request) {
 		c.writeErr(w, http.StatusInternalServerError, "读取结果文件失败")
 		return
 	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Content-Disposition", `attachment; filename="证件照.png"`)
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Disposition", `attachment; filename="证件照.jpg"`)
 	_, _ = w.Write(data)
 }
 

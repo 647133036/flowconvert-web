@@ -807,3 +807,89 @@ func MakeRefVideoAI(client *AIClient, tmpDir, prompt string, imageURLs []string,
 	}
 	return dest, nil
 }
+
+// MakeAgnesVideoViaPython runs the agnes_video.py pipeline: LLM analysis
+// (Agnes 3.0 Flash) → segmented agnes-video-2.5-flash generation → ffmpeg
+// concat. Agnes credentials are passed to the script via inherited process
+// environment variables (AGNES_API_KEY, AGNES_BASE_URL, AGNES_CHAT_MODEL),
+// never written to the payload file on disk.
+func MakeAgnesVideoViaPython(tmpDir, prompt string, duration int, aspectRatio string) (string, error) {
+	dest := filepath.Join(tmpDir, "video.mp4")
+	payloadPath := filepath.Join(tmpDir, "agnes_payload.json")
+	payload, err := marshalVideoPayload(map[string]interface{}{
+		"prompt":       prompt,
+		"duration":     duration,
+		"aspect_ratio": aspectRatio,
+	})
+	if err != nil {
+		return "", fmt.Errorf("参数序列化失败: %v", err)
+	}
+	if err := os.WriteFile(payloadPath, payload, 0o600); err != nil {
+		return "", fmt.Errorf("保存参数失败: %v", err)
+	}
+	defer os.Remove(payloadPath)
+
+	out, err := RunCmdTimeout(35*time.Minute, PythonPath(), ScriptPath("agnes_video.py"), payloadPath, dest)
+	if err != nil {
+		return "", fmt.Errorf("Agnes 视频生成失败: %s", strings.TrimSpace(out))
+	}
+	if _, err := os.Stat(dest); err != nil {
+		return "", fmt.Errorf("Agnes 视频生成失败，未输出文件")
+	}
+	return dest, nil
+}
+
+func MakeAgnesKeyframeVideoViaPython(tmpDir, firstURL, lastURL, prompt string, duration int, aspectRatio string) (string, error) {
+	dest := filepath.Join(tmpDir, "video.mp4")
+	payloadPath := filepath.Join(tmpDir, "agnes_payload.json")
+	payload, err := marshalVideoPayload(map[string]interface{}{
+		"mode":         "keyframe",
+		"prompt":       prompt,
+		"duration":     duration,
+		"aspect_ratio": aspectRatio,
+		"first_frame":  firstURL,
+		"last_frame":   lastURL,
+	})
+	if err != nil {
+		return "", fmt.Errorf("参数序列化失败: %v", err)
+	}
+	if err := os.WriteFile(payloadPath, payload, 0o600); err != nil {
+		return "", fmt.Errorf("保存参数失败: %v", err)
+	}
+	defer os.Remove(payloadPath)
+	out, err := RunCmdTimeout(35*time.Minute, PythonPath(), ScriptPath("agnes_video.py"), payloadPath, dest)
+	if err != nil {
+		return "", fmt.Errorf("Agnes 视频生成失败: %s", strings.TrimSpace(out))
+	}
+	if _, err := os.Stat(dest); err != nil {
+		return "", fmt.Errorf("Agnes 视频生成失败，未输出文件")
+	}
+	return dest, nil
+}
+
+func MakeAgnesRefVideoViaPython(tmpDir, prompt string, refURLs []string, duration int, aspectRatio string) (string, error) {
+	dest := filepath.Join(tmpDir, "video.mp4")
+	payloadPath := filepath.Join(tmpDir, "agnes_payload.json")
+	payload, err := marshalVideoPayload(map[string]interface{}{
+		"mode":         "ref",
+		"prompt":       prompt,
+		"duration":     duration,
+		"aspect_ratio": aspectRatio,
+		"images":       refURLs,
+	})
+	if err != nil {
+		return "", fmt.Errorf("参数序列化失败: %v", err)
+	}
+	if err := os.WriteFile(payloadPath, payload, 0o600); err != nil {
+		return "", fmt.Errorf("保存参数失败: %v", err)
+	}
+	defer os.Remove(payloadPath)
+	out, err := RunCmdTimeout(35*time.Minute, PythonPath(), ScriptPath("agnes_video.py"), payloadPath, dest)
+	if err != nil {
+		return "", fmt.Errorf("Agnes 视频生成失败: %s", strings.TrimSpace(out))
+	}
+	if _, err := os.Stat(dest); err != nil {
+		return "", fmt.Errorf("Agnes 视频生成失败，未输出文件")
+	}
+	return dest, nil
+}

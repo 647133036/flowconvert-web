@@ -843,9 +843,11 @@ body {
 
 .color-grid {
   display: flex;
-  gap: 0.5rem;
+  column-gap: 0.75rem;
+  row-gap: 2rem;
   flex-wrap: wrap;
-  margin: 0.5rem 0;
+  margin: 0.5rem 0 0.25rem;
+  padding-bottom: 0.25rem;
 }
 
 .color-btn {
@@ -856,6 +858,7 @@ body {
   cursor: pointer;
   transition: all 0.2s;
   position: relative;
+  margin-bottom: 1.25rem;
 }
 
 .color-btn:hover {
@@ -869,7 +872,7 @@ body {
 
 .color-btn .color-label {
   position: absolute;
-  bottom: -18px;
+  bottom: -1.35rem;
   left: 50%;
   transform: translateX(-50%);
   font-size: 0.7rem;

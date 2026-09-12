@@ -97,12 +97,8 @@ func (h *VideoGenH) HandleTextVideo(w http.ResponseWriter, r *http.Request) {
 
 		var dest string
 		var genErr error
-		if h.AI != nil {
-			if duration > 12 {
-				dest, genErr = service.MakeLongTextVideoAI(h.AI, tmp, prompt, duration, aspectRatio)
-			} else {
-				dest, genErr = service.MakeTextVideoAI(h.AI, tmp, prompt, duration, aspectRatio)
-			}
+		if h.AI != nil && h.AI.HasAgnes() {
+			dest, genErr = service.MakeAgnesVideoViaPython(tmp, prompt, duration, aspectRatio)
 		}
 		if dest == "" || genErr != nil {
 			fmt.Fprintf(os.Stderr, "[VideoTextJob %s] AI failed: %v, fallback to python\n", job.ID, genErr)
@@ -236,10 +232,14 @@ func (h *VideoGenH) HandleKeyframeVideo(w http.ResponseWriter, r *http.Request) 
 		var aiErr error
 		fmt.Fprintf(os.Stderr, "[VideoKFJob %s] start: duration=%d ratio=%s prompt=%s\n", job.ID, duration, aspectRatio, prompt)
 		if h.AI != nil {
-			if duration > 12 {
-				destPath, aiErr = service.MakeLongKeyframeVideoAI(h.AI, tmp, firstURL, lastURL, prompt, duration, aspectRatio)
-			} else {
-				destPath, aiErr = service.MakeKeyframeVideoAI(h.AI, tmp, firstURL, lastURL, prompt, duration, aspectRatio)
+			destPath, aiErr = service.MakeAgnesKeyframeVideoViaPython(tmp, firstURL, lastURL, prompt, duration, aspectRatio)
+			if aiErr != nil {
+				fmt.Fprintf(os.Stderr, "[VideoKFJob %s] Agnes-Python failed: %v, try Go\n", job.ID, aiErr)
+				if duration > 12 {
+					destPath, aiErr = service.MakeLongKeyframeVideoAI(h.AI, tmp, firstURL, lastURL, prompt, duration, aspectRatio)
+				} else {
+					destPath, aiErr = service.MakeKeyframeVideoAI(h.AI, tmp, firstURL, lastURL, prompt, duration, aspectRatio)
+				}
 			}
 		}
 		if destPath == "" || aiErr != nil {
@@ -374,10 +374,14 @@ func (h *VideoGenH) HandleRefVideo(w http.ResponseWriter, r *http.Request) {
 		var genErr error
 		fmt.Fprintf(os.Stderr, "[VideoRefJob %s] start: duration=%d ratio=%s prompt=%s refCount=%d\n", job.ID, duration, aspectRatio, prompt, len(refPaths))
 		if h.AI != nil {
-			if duration > 12 {
-				dest, genErr = service.MakeLongRefVideoAI(h.AI, tmp, prompt, refURLs, duration, aspectRatio)
-			} else {
-				dest, genErr = service.MakeRefVideoAI(h.AI, tmp, prompt, refURLs, duration, aspectRatio)
+			dest, genErr = service.MakeAgnesRefVideoViaPython(tmp, prompt, refURLs, duration, aspectRatio)
+			if genErr != nil {
+				fmt.Fprintf(os.Stderr, "[VideoRefJob %s] Agnes-Python failed: %v, try Go\n", job.ID, genErr)
+				if duration > 12 {
+					dest, genErr = service.MakeLongRefVideoAI(h.AI, tmp, prompt, refURLs, duration, aspectRatio)
+				} else {
+					dest, genErr = service.MakeRefVideoAI(h.AI, tmp, prompt, refURLs, duration, aspectRatio)
+				}
 			}
 		}
 		if dest == "" || genErr != nil {
@@ -442,7 +446,7 @@ func (h *VideoGenH) uploadImageToPublic(localPath, baseName string) (string, err
 func isValidImageType(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
 	switch ext {
-	case ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp":
+	case ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif":
 		return true
 	}
 	return false
